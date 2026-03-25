@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zx-backend"
+version = "0.1.0"
+description = "FastAPI backend for zX parametric exploration app"
+readme = "README.md"
+requires-python = ">=3.12, <3.14"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pandas",
+    "python-multipart",
+    "asyncssh",
+    "pydantic",
+    "cryptography"
+]
+
+[project.scripts]
+zx-backend = "zx.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["zx"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

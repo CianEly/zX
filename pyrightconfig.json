@@ -1,0 +1,12 @@
+{
+    "venvPath": "/Users/cianely/zX/backend",
+    "venv": ".venv",
+    "include": ["backend"],
+    "executionEnvironments": [
+        {
+            "root": "backend",
+            "venvPath": "/Users/cianely/zX/backend",
+            "venv": ".venv"
+        }
+    ]
+}
