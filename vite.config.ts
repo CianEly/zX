@@ -10,11 +10,30 @@ export default defineConfig({
     electron([
       {
         entry: 'electron/main.ts',
+        vite: {
+          build: {
+            rollupOptions: {
+              external: ['ssh2', 'cpu-features'],
+            },
+          },
+        },
       },
       {
-        entry: 'electron/preload.ts',
+        entry: 'electron/preload.cts',
         onstart(options) {
           options.reload()
+        },
+        vite: {
+          build: {
+            lib: {
+              entry: 'electron/preload.cts',
+              formats: ['cjs'],
+              fileName: () => 'preload.cjs',
+            },
+            rollupOptions: {
+              external: ['electron'],
+            },
+          },
         },
       },
     ]),

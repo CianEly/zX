@@ -4,9 +4,11 @@ import { StatusBar } from './StatusBar';
 interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
+  port?: string;
 }
 
-export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
+export function Sidebar({ activeTab, setActiveTab, connectionStatus, port }: SidebarProps) {
   return (
     <div className="sidebar">
       <div className="logo">
@@ -53,7 +55,7 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
           Files
         </div>
       </nav>
-      <StatusBar />
+      <StatusBar connectionStatus={connectionStatus} port={port} />
     </div>
   );
 }
