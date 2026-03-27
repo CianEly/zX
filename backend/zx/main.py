@@ -34,7 +34,7 @@ def verify_token(auth: HTTPAuthorizationCredentials = Depends(security)):
     return auth.credentials
 
 @app.get("/health")
-async def health_check(token: str = Depends(verify_token)):
+async def health_check():
     return {"status": "ok", "version": "0.1.0"}
 
 def main():

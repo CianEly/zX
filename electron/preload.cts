@@ -17,7 +17,9 @@ try {
     connectSsh: (params: { host: string; tunnelPort: number }) => ipcRenderer.invoke('connect-ssh', params),
     spawnLocalBackend: () => ipcRenderer.invoke('spawn-local-backend'),
     onConnectionProgress: (callback: (data: any) => void) => {
-      ipcRenderer.on('connection-progress', (_event: any, data: any) => callback(data))
+      const listener = (_event: any, data: any) => callback(data)
+      ipcRenderer.on('connection-progress', listener)
+      return () => ipcRenderer.off('connection-progress', listener) // Return uninstaller
     }
   })
   console.log('IPC Bridge exposed successfully')

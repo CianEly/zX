@@ -9,54 +9,57 @@ export default function App() {
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('connecting')
   const [apiConfig, setApiConfig] = useState<{ port: string; token: string } | null>(null)
 
+
   useEffect(() => {
-    let intervalId: any
-    
-    // 1. Get API config from Electron Main
-    window.ipcRenderer.getApiConfig().then(config => {
-      setApiConfig(config)
-      
-      // 2. Poll health endpoint
-      const checkHealth = async () => {
-        try {
-          const res = await fetch(`http://127.0.0.1:${config.port}/health`, {
-            headers: {
-              'Authorization': `Bearer ${config.token}`
-            }
-          })
-          if (res.ok) {
-            setConnectionStatus('connected')
-          } else {
-            setConnectionStatus('error')
-          }
-        } catch (e) {
-          setConnectionStatus('connecting')
-        }
+    const fetchConfig = async () => {
+      try {
+        const config = await window.ipcRenderer.getApiConfig()
+        setApiConfig(prev => {
+          if (prev?.port === config.port && prev?.token === config.token) return prev
+          return config
+        })
+      } catch {
+        setConnectionStatus('error')
       }
-
-      intervalId = setInterval(checkHealth, 2000)
-      checkHealth()
-    }).catch(() => {
-      setConnectionStatus('error')
-    })
-
-    return () => {
-      if (intervalId) clearInterval(intervalId)
     }
+
+    fetchConfig()
+
+    const interval = setInterval(fetchConfig, 2000)
+    return () => clearInterval(interval)
   }, [])
 
+  useEffect(() => {
+    if (!apiConfig) return
+
+    const checkHealth = async () => {
+      try {
+        const res = await fetch(`http://127.0.0.1:${apiConfig.port}/health`, {
+          headers: { Authorization: `Bearer ${apiConfig.token}` }
+        })
+        setConnectionStatus(res.ok ? 'connected' : 'error')
+      } catch {
+        setConnectionStatus('connecting')
+      }
+    }
+
+    checkHealth()
+    const interval = setInterval(checkHealth, 2000)
+    return () => clearInterval(interval)
+  }, [apiConfig])
+
   return (
-    <Layout 
-      activeTab={activeTab} 
-      setActiveTab={setActiveTab} 
+    <Layout
+      activeTab={activeTab}
+      setActiveTab={setActiveTab}
       connectionStatus={connectionStatus}
       port={apiConfig?.port}
     >
       {activeTab === 'parameters' && <ParameterGrid />}
       {activeTab === 'visualization' && <ConnectionViz />}
       {activeTab === 'hooks' && <HookEditor />}
-      {activeTab === 'terminal' && <div className="content"><div style={{color: 'var(--text3)'}}>Terminal panel placeholder</div></div>}
-      {activeTab === 'files' && <div className="content"><div style={{color: 'var(--text3)'}}>Files panel placeholder</div></div>}
+      {activeTab === 'terminal' && <div className="content"><div style={{ color: 'var(--text3)' }}>Terminal panel placeholder</div></div>}
+      {activeTab === 'files' && <div className="content"><div style={{ color: 'var(--text3)' }}>Files panel placeholder</div></div>}
     </Layout>
   )
 }

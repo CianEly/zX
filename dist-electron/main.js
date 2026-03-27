@@ -508,6 +508,7 @@ function stringify(config) {
 }
 //#endregion
 //#region electron/main.ts
+var currentTunnelPort = null;
 var _dirname = dirname(fileURLToPath(import.meta.url));
 var username = userInfo().username;
 async function getSSHConfigForHost(hostAlias) {
@@ -538,12 +539,13 @@ var API_PORT = process.env.ZX_PORT || "8000";
 var API_TOKEN = randomBytes(32).toString("hex");
 ipcMain.handle("get-api-config", () => {
 	return {
-		port: API_PORT,
+		port: currentTunnelPort,
 		token: API_TOKEN
 	};
 });
 ipcMain.handle("spawn-local-backend", async () => {
 	try {
+		currentTunnelPort = null;
 		spawnBackend();
 		return { success: true };
 	} catch (e) {
@@ -608,59 +610,99 @@ function spawnBackend() {
 ipcMain.handle("connect-ssh", async (event, { host: hostAlias, tunnelPort }) => {
 	if (sshClient) sshClient.end();
 	if (tunnelServer) tunnelServer.close();
+	currentTunnelPort = tunnelPort;
 	const config = await getSSHConfigForHost(hostAlias);
 	sshClient = new Client();
+	event.sender.send("connection-progress", {
+		step: 1,
+		status: "active",
+		sub: "connecting..."
+	});
 	return new Promise((resolve, reject) => {
 		sshClient.on("ready", () => {
 			console.log(`SSH Client Ready: ${config.user}@${config.host}`);
-			setupRemoteEnvironment(sshClient, tunnelPort).then(() => resolve({ success: true })).catch((err) => reject(err));
+			event.sender.send("connection-progress", {
+				step: 1,
+				status: "done",
+				sub: "connected"
+			});
+			setupRemoteEnvironment(sshClient, tunnelPort, event.sender).then(() => resolve({ success: true })).catch((err) => reject(err));
 		}).on("error", (err) => {
 			console.error("SSH Connection Error:", err);
+			event.sender.send("connection-progress", {
+				step: 1,
+				status: "error",
+				sub: err.message
+			});
 			reject(err);
 		}).connect({
 			host: config.host,
 			port: config.port,
 			username: config.user,
-			agent: process.env.SSH_AUTH_SOCK
+			password: "testpass"
 		});
 	});
 });
-async function setupRemoteEnvironment(conn, localPort) {
+async function setupRemoteEnvironment(conn, localPort, webContents) {
 	const sendProgress = (step, status, sub) => {
-		mainWindow?.webContents.send("connection-progress", {
+		webContents.send("connection-progress", {
 			step,
 			status,
 			sub
 		});
 	};
 	try {
-		sendProgress(1, "active", "ssh handshake");
 		sendProgress(2, "active", "installing uv...");
 		await executeRemote(conn, "curl -LsSf https://astral.sh/uv/install.sh | sh");
 		sendProgress(2, "done", "uv installed");
 		await executeRemote(conn, "mkdir -p ~/.zx/backend");
 		sendProgress(3, "active", "deploying backend wheel...");
-		await uploadFile(conn, join(_dirname, "..", "backend", "dist", "zx_backend-0.1.0-py3-none-any.whl"), ".zx/backend/zx_backend.whl");
+		await uploadFile(conn, join(_dirname, "..", "backend", "dist", "zx_backend-0.1.0-py3-none-any.whl"), ".zx/backend/zx_backend-0.1.0-py3-none-any.whl");
 		sendProgress(3, "done", "backend deployed");
 		sendProgress(4, "active", "setting up python venv...");
-		await executeRemote(conn, "~/.local/bin/uv venv ~/.zx/python");
-		await executeRemote(conn, "~/.local/bin/uv pip install ~/.zx/backend/zx_backend.whl --python ~/.zx/python/bin/python");
+		await executeRemote(conn, "~/.local/bin/uv venv ~/.zx/python --clear");
+		await executeRemote(conn, "export PATH=\"$HOME/.local/bin:$PATH\" && ~/.local/bin/uv pip install ~/.zx/backend/zx_backend-0.1.0-py3-none-any.whl --python ~/.zx/python/bin/python");
 		sendProgress(4, "done", "venv ready");
+		await executeRemote(conn, "pkill -f 'zx.main' || true");
 		sendProgress(5, "active", "starting remote server...");
-		const remoteCmd = `ZX_API_TOKEN=${API_TOKEN} ZX_PORT=8000 ~/.zx/python/bin/python -m zx.main`;
+		const remoteCmd = `
+    export ZX_API_TOKEN=${API_TOKEN} && \
+    export ZX_PORT=8000 && \
+    ~/.zx/python/bin/python -m zx.main
+    `;
 		conn.exec(remoteCmd, (err, stream) => {
 			if (err) console.error("Error starting remote backend:", err);
 			stream.on("data", (data) => console.log(`[Remote Backend]: ${data}`));
+			stream.stderr.on("data", (data) => console.error(`[Remote Backend Error]: ${data}`));
 		});
-		sendProgress(4, "active", `tunneling localhost:${localPort} ↔ 8000`);
+		sendProgress(6, "active", `tunneling localhost:${localPort} ↔ 8000`);
 		tunnelServer = net.createServer((sock) => {
 			conn.forwardOut(sock.remoteAddress, sock.remotePort, "127.0.0.1", 8e3, (err, stream) => {
 				if (err) return sock.end();
 				sock.pipe(stream).pipe(sock);
 			});
 		}).listen(localPort, "127.0.0.1");
-		sendProgress(4, "done", "tunnel established");
-		sendProgress(5, "done", "remote backend ready");
+		sendProgress(6, "done", "tunnel established");
+		let attempts = 0;
+		let success = false;
+		await new Promise((res) => setTimeout(res, 500));
+		while (attempts < 10) {
+			try {
+				if ((await fetch(`http://127.0.0.1:${localPort}/health`, { headers: { Authorization: `Bearer ${API_TOKEN}` } })).ok) {
+					success = true;
+					break;
+				}
+			} catch {}
+			attempts++;
+			await new Promise((res) => setTimeout(res, 500));
+		}
+		if (success) {
+			console.log("✅ Backend ready");
+			sendProgress(5, "done", "remote backend ready");
+		} else {
+			console.warn("⚠️ Backend may not be ready yet");
+			sendProgress(5, "error", "backend not reachable");
+		}
 	} catch (err) {
 		sendProgress(0, "error", err.message);
 		throw err;

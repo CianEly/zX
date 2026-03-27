@@ -18,17 +18,25 @@ export function ConnectionViz() {
       if (hosts.length > 0) setSelectedHost(hosts[0])
     })
 
-    window.ipcRenderer.onConnectionProgress((data) => {
+    const cleanup = window.ipcRenderer.onConnectionProgress((data) => {
       setSteps(prev => ({
         ...prev,
-        [data.step]: { status: data.status, sub: data.sub }
+        [data.step]: {
+          ...prev[data.step],
+          status: data.status,
+          sub: data.sub
+        }
       }))
     })
+
+    return cleanup
   }, [])
 
   const handleConnect = async () => {
     setIsConnecting(true)
-    setSteps({})
+    setSteps({
+      1: { status: 'active', sub: 'connecting...' }
+    })
     try {
       if (env === 'local') {
         const res = await window.ipcRenderer.spawnLocalBackend()
@@ -51,27 +59,31 @@ export function ConnectionViz() {
   const getStepStatus = (id: number) => steps[id]?.status || 'wait'
   const getStepSub = (id: number) => steps[id]?.sub || ''
 
+  useEffect(() => {
+    console.log('STEP 1 STATE:', steps[1])
+  }, [steps])
+
   return (
     <div className="layout">
       <div className="left-pane">
         <div>
           <div className="pane-title">connection</div>
           <div className="seg-ctrl">
-            <div 
+            <div
               className={`seg ${env === 'local' ? 'active' : ''}`}
               onClick={() => setEnv('local')}
             >local</div>
-            <div 
+            <div
               className={`seg ${env === 'remote' ? 'active' : ''}`}
               onClick={() => setEnv('remote')}
             >remote</div>
           </div>
-          
+
           {env === 'remote' && (
             <>
               <div className="label">ssh host</div>
-              <select 
-                className="field" 
+              <select
+                className="field"
                 value={selectedHost}
                 onChange={(e) => setSelectedHost(e.target.value)}
               >
@@ -81,39 +93,39 @@ export function ConnectionViz() {
                   <option disabled>No hosts found in ~/.ssh/config</option>
                 )}
               </select>
-              <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8}}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <div>
                   <div className="label">tunnel port</div>
-                  <input 
-                    className="field" 
-                    value={tunnelPort} 
+                  <input
+                    className="field"
+                    value={tunnelPort}
                     onChange={(e) => setTunnelPort(e.target.value)}
-                    type="text" 
+                    type="text"
                   />
                 </div>
                 <div>
                   <div className="label">user</div>
-                  <input 
-                    className="field" 
+                  <input
+                    className="field"
                     placeholder="optional"
-                    value={user} 
+                    value={user}
                     onChange={(e) => setUser(e.target.value)}
-                    type="text" 
+                    type="text"
                   />
                 </div>
               </div>
               <div className="label">identity file</div>
-              <input 
-                className="field" 
-                value={identityFile} 
+              <input
+                className="field"
+                value={identityFile}
                 onChange={(e) => setIdentityFile(e.target.value)}
-                type="text" 
+                type="text"
               />
             </>
           )}
 
           {env === 'local' && (
-            <div style={{color: 'var(--text3)', fontSize: 13, marginTop: 12, padding: 12, border: '1px solid var(--border)', borderRadius: 4}}>
+            <div style={{ color: 'var(--text3)', fontSize: 13, marginTop: 12, padding: 12, border: '1px solid var(--border)', borderRadius: 4 }}>
               Local backend is managed automatically by the Electron process.
             </div>
           )}
@@ -122,13 +134,16 @@ export function ConnectionViz() {
         <div>
           <div className="pane-title">bootstrap status</div>
           <div className="step-list">
+
             <div className="step">
               <div className={`step-num sn-${getStepStatus(1)}`}>
                 {getStepStatus(1) === 'done' ? '✓' : '1'}
               </div>
+
               <div>
                 <div className="step-text"><b>{env === 'local' ? 'local process' : 'ssh handshake'}</b></div>
                 <div className="step-sub">{getStepSub(1) || (env === 'local' ? 'idle' : 'waiting...')}</div>
+
               </div>
             </div>
             {env === 'remote' && (
@@ -151,21 +166,21 @@ export function ConnectionViz() {
               <div className={`step-num sn-${getStepStatus(5)}`}>
                 {getStepStatus(5) === 'done' ? '✓' : (env === 'remote' ? '5' : '2')}
               </div>
-              <div><div className="step-text" style={{color: getStepStatus(5) === 'done' ? 'var(--text1)' : 'var(--text3)'}}>token auth</div><div className="step-sub">{getStepSub(5)}</div></div>
+              <div><div className="step-text" style={{ color: getStepStatus(5) === 'done' ? 'var(--text1)' : 'var(--text3)' }}>token auth</div><div className="step-sub">{getStepSub(5)}</div></div>
             </div>
           </div>
         </div>
 
         <div>
           <div className="label">project directory ({env})</div>
-          <input 
-            className="field" 
-            value={projectDir} 
+          <input
+            className="field"
+            value={projectDir}
             onChange={(e) => setProjectDir(e.target.value)}
-            type="text" 
+            type="text"
           />
-          <div style={{display: 'flex', gap: 8, marginTop: 4}}>
-            <button 
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <button
               className={`btn btn-accent btn-full ${isConnecting ? 'loading' : ''}`}
               onClick={handleConnect}
               disabled={isConnecting}
@@ -177,16 +192,16 @@ export function ConnectionViz() {
       </div>
 
       <div className="right-pane">
-        <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
-          <div style={{fontSize: 15, fontWeight: 600}}>visualization</div>
-          <div style={{marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text3)'}}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>visualization</div>
+          <div style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text3)' }}>
             {env} exploration · metrics visualization
           </div>
         </div>
 
-        <div className="viz-placeholder" style={{flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)'}}>
-          <div style={{textAlign: 'center'}}>
-            <Activity size={48} opacity={0.2} style={{marginBottom: 12}} />
+        <div className="viz-placeholder" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)' }}>
+          <div style={{ textAlign: 'center' }}>
+            <Activity size={48} opacity={0.2} style={{ marginBottom: 12 }} />
             <div>connect to a backend to see exploration results</div>
           </div>
         </div>

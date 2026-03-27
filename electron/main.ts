@@ -11,6 +11,8 @@ import * as net from 'node:net'
 import SSHConfig from 'ssh-config'
 import { Client } from 'ssh2'
 
+let currentTunnelPort: number | null = null
+
 const _dirname = dirname(fileURLToPath(import.meta.url))
 const username = userInfo().username
 
@@ -43,12 +45,16 @@ const API_TOKEN = randomBytes(32).toString('hex')
 
 // Handle API config request from frontend
 ipcMain.handle('get-api-config', () => {
-  return { port: API_PORT, token: API_TOKEN }
+  return {
+    port: currentTunnelPort,
+    token: API_TOKEN
+  }
 })
 
 // Handle local backend spawning from frontend
 ipcMain.handle('spawn-local-backend', async () => {
   try {
+    currentTunnelPort = null // Reset tunnel port so frontend falls back to API_PORT
     spawnBackend()
     return { success: true }
   } catch (e) {
@@ -65,10 +71,10 @@ ipcMain.handle('get-ssh-hosts', async () => {
     } catch {
       return [] // File doesn't exist or is not readable
     }
-    
+
     const content = await readFile(configPath, 'utf8')
     const config = SSHConfig.parse(content)
-    
+
     return config
       .filter((line: any) => line.type === SSHConfig.DIRECTIVE && line.param === 'Host')
       .map((line: any) => line.value)
@@ -83,7 +89,7 @@ ipcMain.handle('get-ssh-hosts', async () => {
 function spawnBackend() {
   const backendDir = join(_dirname, '..', 'backend')
   const uvPath = join(homedir(), '.local/bin/uv')
-  
+
   console.log('Spawning local backend...')
   backendProcess = spawn(uvPath, ['run', 'zx-backend', '--port', API_PORT], {
     cwd: backendDir,
@@ -100,20 +106,20 @@ function spawnBackend() {
     const msg = data.toString()
     console.error(`[Backend Error]: ${msg}`)
     if (msg.includes('address already in use')) {
-      mainWindow?.webContents.send('connection-progress', { 
-        step: 1, 
-        status: 'error', 
-        sub: `Port ${API_PORT} in use. Kill existing process or use ZX_PORT.` 
+      mainWindow?.webContents.send('connection-progress', {
+        step: 1,
+        status: 'error',
+        sub: `Port ${API_PORT} in use. Kill existing process or use ZX_PORT.`
       })
     }
   })
   backendProcess.on('close', (code) => {
     console.log(`Backend process exited with code ${code}`)
     if (code !== 0 && code !== null) {
-      mainWindow?.webContents.send('connection-progress', { 
-        step: 0, 
-        status: 'error', 
-        sub: `Backend exited with code ${code}` 
+      mainWindow?.webContents.send('connection-progress', {
+        step: 0,
+        status: 'error',
+        sub: `Backend exited with code ${code}`
       })
     }
   })
@@ -121,75 +127,138 @@ function spawnBackend() {
 
 // Remote SSH Connection & Bootstrapping
 ipcMain.handle('connect-ssh', async (event, { host: hostAlias, tunnelPort }) => {
+
+
   if (sshClient) sshClient.end()
   if (tunnelServer) tunnelServer.close()
-  
+
+  currentTunnelPort = tunnelPort
   const config = await getSSHConfigForHost(hostAlias)
   sshClient = new Client()
-  
+
+  // ✅ STEP 1 → connecting
+  event.sender.send('connection-progress', {
+    step: 1,
+    status: 'active',
+    sub: 'connecting...'
+  })
+
+
   return new Promise((resolve, reject) => {
     sshClient!.on('ready', () => {
       console.log(`SSH Client Ready: ${config.user}@${config.host}`)
-      setupRemoteEnvironment(sshClient!, tunnelPort)
+      event.sender.send('connection-progress', {
+        step: 1,
+        status: 'done',
+        sub: 'connected'
+      })
+
+      setupRemoteEnvironment(sshClient!, tunnelPort, event.sender)
         .then(() => resolve({ success: true }))
         .catch(err => reject(err))
     }).on('error', (err) => {
       console.error('SSH Connection Error:', err)
+
+      event.sender.send('connection-progress', {
+        step: 1,
+        status: 'error',
+        sub: err.message
+      })
       reject(err)
+
     }).connect({
       host: config.host,
       port: config.port,
       username: config.user,
-      agent: process.env.SSH_AUTH_SOCK,
+      password: "testpass", //testing serverconnectivity remove
+      //agent: process.env.SSH_AUTH_SOCK,
     })
   })
 })
 
-async function setupRemoteEnvironment(conn: Client, localPort: number) {
+async function setupRemoteEnvironment(conn: Client, localPort: number, webContents: Electron.WebContents) {
   const sendProgress = (step: number, status: string, sub?: string) => {
-    mainWindow?.webContents.send('connection-progress', { step, status, sub })
+    webContents.send('connection-progress', { step, status, sub })
   }
 
   try {
-    sendProgress(1, 'active', 'ssh handshake')
+
     // 1. Bootstrap uv
     sendProgress(2, 'active', 'installing uv...')
     await executeRemote(conn, 'curl -LsSf https://astral.sh/uv/install.sh | sh')
     sendProgress(2, 'done', 'uv installed')
-    
+
     // 2. Create directory
     await executeRemote(conn, 'mkdir -p ~/.zx/backend')
-    
+
     // 3. SFTP the wheel
     sendProgress(3, 'active', 'deploying backend wheel...')
     const localWheel = join(_dirname, '..', 'backend', 'dist', 'zx_backend-0.1.0-py3-none-any.whl')
-    await uploadFile(conn, localWheel, '.zx/backend/zx_backend.whl')
+    await uploadFile(conn, localWheel, '.zx/backend/zx_backend-0.1.0-py3-none-any.whl')
     sendProgress(3, 'done', 'backend deployed')
-    
+
     // 4. Install wheel into venv
     sendProgress(4, 'active', 'setting up python venv...')
-    await executeRemote(conn, '~/.local/bin/uv venv ~/.zx/python')
-    await executeRemote(conn, '~/.local/bin/uv pip install ~/.zx/backend/zx_backend.whl --python ~/.zx/python/bin/python')
+    await executeRemote(conn, '~/.local/bin/uv venv ~/.zx/python --clear')
+    await executeRemote(
+      conn,
+      'export PATH="$HOME/.local/bin:$PATH" && ~/.local/bin/uv pip install ~/.zx/backend/zx_backend-0.1.0-py3-none-any.whl --python ~/.zx/python/bin/python'
+    )
     sendProgress(4, 'done', 'venv ready')
-    
+
+    await executeRemote(
+      conn,
+      "pkill -f 'zx.main' || true"
+    )
     // 5. Start backend on remote
     sendProgress(5, 'active', 'starting remote server...')
-    const remoteCmd = `ZX_API_TOKEN=${API_TOKEN} ZX_PORT=8000 ~/.zx/python/bin/python -m zx.main`
+    const remoteCmd = `
+    export ZX_API_TOKEN=${API_TOKEN} && \
+    export ZX_PORT=8000 && \
+    ~/.zx/python/bin/python -m zx.main
+    `
     conn.exec(remoteCmd, (err, stream) => {
       if (err) console.error('Error starting remote backend:', err)
       stream.on('data', (data: any) => console.log(`[Remote Backend]: ${data}`))
+      stream.stderr.on('data', (data: any) => console.error(`[Remote Backend Error]: ${data}`))
     })
 
     // 6. Setup Tunnel
-    sendProgress(4, 'active', `tunneling localhost:${localPort} ↔ 8000`)
+    sendProgress(6, 'active', `tunneling localhost:${localPort} ↔ 8000`)
     tunnelServer = net.createServer((sock) => {
       conn.forwardOut(sock.remoteAddress!, sock.remotePort!, '127.0.0.1', 8000, (err, stream) => {
         if (err) return sock.end()
         sock.pipe(stream).pipe(sock)
       })
     }).listen(localPort, '127.0.0.1')
-    sendProgress(4, 'done', 'tunnel established')
-    sendProgress(5, 'done', 'remote backend ready')
+    sendProgress(6, 'done', 'tunnel established')
+    let attempts = 0
+    let success = false
+    await new Promise(res => setTimeout(res, 500))
+    while (attempts < 10) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${localPort}/health`, {
+          headers: { Authorization: `Bearer ${API_TOKEN}` }
+        })
+
+        if (res.ok) {
+          success = true
+          break
+        }
+      } catch { }
+
+
+      attempts++
+      await new Promise(res => setTimeout(res, 500))
+    }
+
+    if (success) {
+      console.log('✅ Backend ready')
+      sendProgress(5, 'done', 'remote backend ready')
+    } else {
+      console.warn('⚠️ Backend may not be ready yet')
+      sendProgress(5, 'error', 'backend not reachable')
+    }
 
   } catch (err) {
     sendProgress(0, 'error', (err as Error).message)
@@ -202,8 +271,8 @@ function executeRemote(conn: Client, cmd: string): Promise<void> {
     conn.exec(cmd, (err, stream) => {
       if (err) return reject(err)
       stream.on('close', () => resolve())
-            .on('data', (data: any) => console.log(`[SSH STDOUT]: ${data}`))
-            .stderr.on('data', (data: any) => console.error(`[SSH STDERR]: ${data}`))
+        .on('data', (data: any) => console.log(`[SSH STDOUT]: ${data}`))
+        .stderr.on('data', (data: any) => console.error(`[SSH STDERR]: ${data}`))
     })
   })
 }
@@ -222,7 +291,7 @@ function uploadFile(conn: Client, localPath: string, remotePath: string): Promis
 
 function createWindow() {
   const preloadPath = join(_dirname, 'preload.cjs')
-  
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -233,7 +302,7 @@ function createWindow() {
     },
   })
   if (!mainWindow) return
-  
+
   mainWindow.setBackgroundColor('#0A0B0F')
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)

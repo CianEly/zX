@@ -14,7 +14,7 @@ declare global {
       getSshHosts: () => Promise<string[]>;
       connectSsh: (params: { host: string; tunnelPort: number }) => Promise<{ success: boolean; error?: string }>;
       spawnLocalBackend: () => Promise<{ success: boolean; error?: string }>;
-      onConnectionProgress: (callback: (data: { step: number; status: string; sub?: string }) => void) => void;
+      onConnectionProgress: (callback: (data: { step: number; status: string; sub?: string }) => void) => () => void;
     };
   }
 }
