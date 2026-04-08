@@ -1,13 +1,99 @@
-import { BrowserWindow, app, ipcMain } from "electron";
+import { BrowserWindow, app, dialog, ipcMain } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { access, readFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import os, { homedir, userInfo } from "node:os";
 import * as net from "node:net";
 import { Client } from "ssh2";
+//#region electron/templates.ts
+var hookTemplates = {
+	"initialize.py": `def initialize(table, state: dict) -> tuple[list[dict], dict]:
+    """
+    Returns (rows, state).
+      - rows: list of input parameter dicts (one dict per row).
+      - state: shared global state dict passed to all subsequent hooks.
+    If table is empty, generate rows from scratch (e.g., DOE).
+    If table has data, transform/augment it as needed.
+    """
+    # Example: return initial parameters
+    rows = [
+        {"x1": 0.5, "x2": 0.5},
+        {"x1": -0.5, "x2": 0.5}
+    ]
+    state["max_iterations"] = 10
+    
+    return rows, state
+`,
+	"preprocess.py": `import os
+from pathlib import Path
+
+def preprocess(row: dict, state: dict, run_dir: Path) -> None:
+    """Prepare input files/config in run_dir for the CLI application."""
+    # Example: write a simple config file
+    with open(run_dir / "input.csv", "w") as f:
+        f.write(f"x1,x2\\n{row.get('x1', 0)},{row.get('x2', 0)}\\n")
+`,
+	"launch.py": `import subprocess
+from pathlib import Path
+
+def launch(row: dict, state: dict, run_dir: Path) -> subprocess.CompletedProcess:
+    """Launch the CLI application in run_dir. Returns the completed process."""
+    # Example: run a bash script or python command
+    # result = subprocess.run(["python", "-c", "print('hello world')"], cwd=run_dir, capture_output=True, text=True)
+    # return result
+    
+    # Simple placeholder: just create a DONE file
+    (run_dir / "DONE").touch()
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+`,
+	"extract.py": `import csv
+from pathlib import Path
+
+def extract(row: dict, state: dict, run_dir: Path) -> dict:
+    """Extract output parameters from run_dir. Returns dict of results to merge into CSV."""
+    # Example: Parse output.csv
+    # with open(run_dir / "output.csv", "r") as f:
+    #     reader = csv.DictReader(f)
+    #     for out_row in reader:
+    #         return {"f1": float(out_row["f1"])}
+    
+    # Placeholder return
+    return {"obj_value": 42.0}
+`,
+	"explore.py": `def explore(table, state: dict) -> list[dict]:
+    """
+    Analyze completed results and generate new parameter sets.
+    Return an empty list to terminate the exploration loop.
+    Use state['max_iterations'] to limit iterations.
+    """
+    current_iter = state.get("iteration", 0)
+    if current_iter >= state.get("max_iterations", 10):
+        return []
+        
+    state["iteration"] = current_iter + 1
+    
+    # Example: suggest simple random mutations
+    import random
+    new_rows = []
+    # logic here to inspect 'table' and pick new points
+    # new_rows.append({"x1": random.random(), "x2": random.random()})
+    
+    return new_rows
+`,
+	"plot.py": `def plot(table, state: dict) -> dict:
+    """
+    Generate custom plots.
+    Returns a dictionary of plotly figure objects.
+    Figures are serialized as Plotly JSON and rendered via react-plotly.js.
+    """
+    # Example: return empty dict
+    return {}
+`
+};
+//#endregion
 //#region node_modules/ssh-config/lib/glob.js
 function escapeChars(text, chars) {
 	for (let char of chars) text = text.replace(new RegExp("\\" + char, "g"), "\\" + char);
@@ -543,6 +629,22 @@ ipcMain.handle("get-api-config", () => {
 		token: API_TOKEN
 	};
 });
+ipcMain.handle("disconnect", async () => {
+	if (backendProcess) {
+		backendProcess.kill();
+		backendProcess = null;
+	}
+	if (sshClient) {
+		sshClient.end();
+		sshClient = null;
+	}
+	if (tunnelServer) {
+		tunnelServer.close();
+		tunnelServer = null;
+	}
+	currentTunnelPort = null;
+	return { success: true };
+});
 ipcMain.handle("spawn-local-backend", async (event) => {
 	try {
 		currentTunnelPort = null;
@@ -584,6 +686,246 @@ ipcMain.handle("get-ssh-hosts", async () => {
 	} catch (e) {
 		console.error("Error reading SSH config:", e);
 		return [];
+	}
+});
+ipcMain.handle("get-recent-projects", async () => {
+	const settingsPath = join(app.getPath("userData"), "recent-projects.json");
+	try {
+		const content = await readFile(settingsPath, "utf8");
+		let projects = JSON.parse(content);
+		if (Array.isArray(projects) && projects.length > 0 && typeof projects[0] === "string") return projects.map((p) => ({
+			path: p,
+			env: "local"
+		}));
+		return projects;
+	} catch {
+		return [];
+	}
+});
+ipcMain.handle("add-recent-project", async (event, { path, env }) => {
+	const settingsPath = join(app.getPath("userData"), "recent-projects.json");
+	let projects = [];
+	try {
+		const content = await readFile(settingsPath, "utf8");
+		projects = JSON.parse(content);
+		if (projects.length > 0 && typeof projects[0] === "string") projects = projects.map((p) => ({
+			path: p,
+			env: "local"
+		}));
+	} catch {}
+	projects = [{
+		path,
+		env
+	}, ...projects.filter((p) => p.path !== path)].slice(0, 10);
+	await writeFile(settingsPath, JSON.stringify(projects));
+	return projects;
+});
+ipcMain.handle("init-project", async (event, { path: projectPath, env }) => {
+	try {
+		if (env === "local") {
+			const expandedPath = projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath;
+			await mkdir(expandedPath, { recursive: true });
+			await mkdir(join(expandedPath, "hooks"), { recursive: true });
+			await mkdir(join(expandedPath, "data"), { recursive: true });
+			for (const [filename, content] of Object.entries(hookTemplates)) try {
+				await access(join(expandedPath, "hooks", filename), constants.R_OK);
+			} catch {
+				await writeFile(join(expandedPath, "hooks", filename), content);
+			}
+			return { success: true };
+		} else {
+			if (!sshClient) throw new Error("No active SSH connection");
+			await executeRemote(sshClient, `mkdir -p ${projectPath}/hooks ${projectPath}/data`);
+			const tempPath = join(app.getPath("userData"), "temp_hooks");
+			await mkdir(tempPath, { recursive: true });
+			for (const [filename, content] of Object.entries(hookTemplates)) {
+				const remoteFile = `${projectPath}/hooks/${filename}`;
+				if (!await new Promise((resolve) => {
+					sshClient.exec(`[ -f ${remoteFile} ] && echo "exists"`, (err, stream) => {
+						if (err) return resolve(false);
+						let out = "";
+						stream.on("data", (d) => out += d.toString());
+						stream.on("close", () => resolve(out.includes("exists")));
+					});
+				})) {
+					console.log(`[init-project] Scaffolding missing hook: ${remoteFile}`);
+					const localT = join(tempPath, filename);
+					await writeFile(localT, content);
+					await uploadFile(sshClient, localT, remoteFile).catch(() => null);
+				}
+			}
+			return { success: true };
+		}
+	} catch (e) {
+		return {
+			success: false,
+			error: e.message
+		};
+	}
+});
+ipcMain.handle("list-hooks", async (event, { projectPath, env }) => {
+	try {
+		if (env === "local") return (await readdir(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "hooks"))).filter((f) => f.endsWith(".py"));
+		else {
+			if (!sshClient) return [];
+			return new Promise((resolve) => {
+				sshClient.exec(`ls ${projectPath}/hooks/*.py`, (err, stream) => {
+					if (err) return resolve([]);
+					let data = "";
+					stream.on("data", (d) => data += d.toString());
+					stream.on("close", () => {
+						resolve(data.trim().split("\n").map((f) => f.split("/").pop()).filter((f) => f));
+					});
+				});
+			});
+		}
+	} catch {
+		return [];
+	}
+});
+ipcMain.handle("read-hook", async (event, { projectPath, filename, env }) => {
+	try {
+		if (env === "local") return await readFile(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "hooks", filename), "utf8");
+		else {
+			if (!sshClient) throw new Error("No SSH connection");
+			return new Promise((resolve, reject) => {
+				sshClient.exec(`cat ${projectPath}/hooks/${filename}`, (err, stream) => {
+					if (err) return reject(err);
+					let data = "";
+					stream.on("data", (d) => data += d.toString());
+					stream.on("close", () => resolve(data));
+				});
+			});
+		}
+	} catch (e) {
+		return `# Error reading hook: ${e.message}`;
+	}
+});
+ipcMain.handle("write-hook", async (event, { projectPath, filename, content, env }) => {
+	try {
+		if (env === "local") {
+			await writeFile(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "hooks", filename), content);
+			return { success: true };
+		} else {
+			if (!sshClient) throw new Error("No SSH connection");
+			console.log(`[write-hook] Remote save attempt: ${projectPath}/hooks/${filename}`);
+			const tempT = join(app.getPath("userData"), `temp_${filename}`);
+			await writeFile(tempT, content);
+			let remoteTarget = `${projectPath}/hooks/${filename}`;
+			if (remoteTarget.startsWith("~/")) remoteTarget = remoteTarget.slice(2);
+			console.log(`[write-hook] SFTP upload to: ${remoteTarget}`);
+			await uploadFile(sshClient, tempT, remoteTarget);
+			console.log(`[write-hook] Success: ${remoteTarget}`);
+			return { success: true };
+		}
+	} catch (e) {
+		console.error("[write-hook] ERROR:", e);
+		return {
+			success: false,
+			error: e.message
+		};
+	}
+});
+ipcMain.handle("list-data", async (event, { projectPath, env }) => {
+	try {
+		if (env === "local") return (await readdir(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "data"))).filter((f) => f.endsWith(".csv"));
+		else {
+			if (!sshClient) return [];
+			return new Promise((resolve) => {
+				sshClient.exec(`ls ${projectPath}/data/*.csv`, (err, stream) => {
+					if (err) return resolve([]);
+					let data = "";
+					stream.on("data", (d) => data += d.toString());
+					stream.on("close", () => {
+						resolve(data.trim().split("\n").map((f) => f.split("/").pop()).filter((f) => f));
+					});
+				});
+			});
+		}
+	} catch {
+		return [];
+	}
+});
+ipcMain.handle("read-data", async (event, { projectPath, filename, env }) => {
+	try {
+		if (env === "local") return await readFile(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "data", filename), "utf8");
+		else {
+			if (!sshClient) throw new Error("No SSH connection");
+			return new Promise((resolve, reject) => {
+				sshClient.exec(`cat ${projectPath}/data/${filename}`, (err, stream) => {
+					if (err) return reject(err);
+					let data = "";
+					stream.on("data", (d) => data += d.toString());
+					stream.on("close", () => resolve(data));
+				});
+			});
+		}
+	} catch (e) {
+		return `# Error reading data: ${e.message}`;
+	}
+});
+ipcMain.handle("write-data", async (event, { projectPath, filename, content, env }) => {
+	try {
+		if (env === "local") {
+			await writeFile(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "data", filename), content);
+			return { success: true };
+		} else {
+			if (!sshClient) throw new Error("No SSH connection");
+			const tempT = join(app.getPath("userData"), `temp_${filename}`);
+			await writeFile(tempT, content);
+			let remoteTarget = `${projectPath}/data/${filename}`;
+			if (remoteTarget.startsWith("~/")) remoteTarget = remoteTarget.slice(2);
+			await uploadFile(sshClient, tempT, remoteTarget);
+			return { success: true };
+		}
+	} catch (e) {
+		return {
+			success: false,
+			error: e.message
+		};
+	}
+});
+ipcMain.handle("import-data", async (event, { projectPath, env }) => {
+	try {
+		console.log(`[import-data] Opening dialog for project: ${projectPath}`);
+		const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+			properties: ["openFile"],
+			filters: [{
+				name: "CSV Files",
+				extensions: ["csv"]
+			}]
+		});
+		if (canceled || filePaths.length === 0) {
+			console.log("[import-data] Dialog canceled");
+			return {
+				success: false,
+				error: "Canceled"
+			};
+		}
+		const sourcePath = filePaths[0];
+		const filename = sourcePath.split(/[\\/]/).pop();
+		console.log(`[import-data] Importing: ${filename} from ${sourcePath}`);
+		const content = await readFile(sourcePath, "utf8");
+		if (env === "local") await writeFile(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "data", filename), content);
+		else {
+			if (!sshClient) throw new Error("No SSH connection");
+			const tempT = join(app.getPath("userData"), `temp_${filename}`);
+			await writeFile(tempT, content);
+			let remoteTarget = `${projectPath}/data/${filename}`;
+			if (remoteTarget.startsWith("~/")) remoteTarget = remoteTarget.slice(2);
+			await uploadFile(sshClient, tempT, remoteTarget);
+		}
+		console.log(`[import-data] Successfully imported: ${filename}`);
+		return {
+			success: true,
+			filename
+		};
+	} catch (e) {
+		console.error("[import-data] ERROR:", e);
+		return {
+			success: false,
+			error: e.message
+		};
 	}
 });
 function spawnBackend() {

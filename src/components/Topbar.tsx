@@ -3,10 +3,11 @@ import { FileUp, Square, Play } from 'lucide-react';
 interface TopbarProps {
   title: string;
   breadcrumb: string;
+  onImport?: () => void;
   compact?: boolean;
 }
 
-export function Topbar({ title, breadcrumb, compact }: TopbarProps) {
+export function Topbar({ title, breadcrumb, compact, onImport }: TopbarProps) {
   return (
     <div className={`topbar ${compact ? 'compact' : ''}`}>
       {compact ? (
@@ -28,7 +29,7 @@ export function Topbar({ title, breadcrumb, compact }: TopbarProps) {
       <div className="topbar-right">
         {compact ? (
           <>
-            <button className="btn">
+            <button className="btn" onClick={onImport}>
               <FileUp size={12} strokeWidth={1.4} />
               Upload
             </button>
@@ -44,7 +45,7 @@ export function Topbar({ title, breadcrumb, compact }: TopbarProps) {
           </>
         ) : (
           <>
-            <button className="btn btn-ghost">
+            <button className="btn btn-ghost" onClick={onImport}>
               <FileUp size={13} strokeWidth={1.5} />
               Import CSV
             </button>

@@ -19,6 +19,10 @@ declare global {
       listHooks: (projectPath: string, env: 'local' | 'remote') => Promise<string[]>;
       readHook: (projectPath: string, filename: string, env: 'local' | 'remote') => Promise<string>;
       writeHook: (projectPath: string, filename: string, content: string, env: 'local' | 'remote') => Promise<{ success: boolean; error?: string }>;
+      listData: (params: { projectPath: string; env: 'local' | 'remote' }) => Promise<string[]>;
+      readData: (params: { projectPath: string; filename: string, env: 'local' | 'remote' }) => Promise<string>;
+      writeData: (params: { projectPath: string; filename: string, content: string, env: 'local' | 'remote' }) => Promise<{ success: boolean; error?: string }>;
+      importData: (params: { projectPath: string; env: 'local' | 'remote' }) => Promise<{ success: boolean; filename?: string; error?: string }>;
       disconnect: () => Promise<{ success: boolean }>;
       connectSsh: (params: { host: string; tunnelPort: number; user?: string; password?: string; identityFile?: string }) => Promise<{ success: boolean; error?: string }>;
       spawnLocalBackend: () => Promise<{ success: boolean; error?: string }>;

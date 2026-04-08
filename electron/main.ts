@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import type { BrowserWindow as BrowserWindowType } from 'electron'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -268,6 +268,112 @@ ipcMain.handle('write-hook', async (event, { projectPath, filename, content, env
   } catch (e: any) { 
     console.error('[write-hook] ERROR:', e)
     return { success: false, error: e.message } 
+  }
+})
+
+ipcMain.handle('list-data', async (event, { projectPath, env }: { projectPath: string, env: 'local' | 'remote' }) => {
+  try {
+    if (env === 'local') {
+      const expandedPath = projectPath.startsWith('~/') ? join(homedir(), projectPath.slice(2)) : projectPath
+      const files = await readdir(join(expandedPath, 'data'))
+      return files.filter(f => f.endsWith('.csv'))
+    } else {
+      if (!sshClient) return []
+      return new Promise((resolve) => {
+        sshClient!.exec(`ls ${projectPath}/data/*.csv`, (err, stream) => {
+          if (err) return resolve([])
+          let data = ''
+          stream.on('data', (d: any) => data += d.toString())
+          stream.on('close', () => {
+            const files = data.trim().split('\n').map(f => f.split('/').pop()!).filter(f => f)
+            resolve(files)
+          })
+        })
+      })
+    }
+  } catch { return [] }
+})
+
+ipcMain.handle('read-data', async (event, { projectPath, filename, env }: { projectPath: string, filename: string, env: 'local' | 'remote' }) => {
+  try {
+    if (env === 'local') {
+      const expandedPath = projectPath.startsWith('~/') ? join(homedir(), projectPath.slice(2)) : projectPath
+      return await readFile(join(expandedPath, 'data', filename), 'utf8')
+    } else {
+      if (!sshClient) throw new Error('No SSH connection')
+      return new Promise((resolve, reject) => {
+        sshClient!.exec(`cat ${projectPath}/data/${filename}`, (err, stream) => {
+          if (err) return reject(err)
+          let data = ''
+          stream.on('data', (d: any) => data += d.toString())
+          stream.on('close', () => resolve(data))
+        })
+      })
+    }
+  } catch (e: any) { return `# Error reading data: ${e.message}` }
+})
+
+ipcMain.handle('write-data', async (event, { projectPath, filename, content, env }: { projectPath: string, filename: string, content: string, env: 'local' | 'remote' }) => {
+  try {
+    if (env === 'local') {
+      const expandedPath = projectPath.startsWith('~/') ? join(homedir(), projectPath.slice(2)) : projectPath
+      await writeFile(join(expandedPath, 'data', filename), content)
+      return { success: true }
+    } else {
+      if (!sshClient) throw new Error('No SSH connection')
+      const tempT = join(app.getPath('userData'), `temp_${filename}`)
+      await writeFile(tempT, content)
+      
+      let remoteTarget = `${projectPath}/data/${filename}`
+      if (remoteTarget.startsWith('~/')) {
+        remoteTarget = remoteTarget.slice(2)
+      }
+      await uploadFile(sshClient, tempT, remoteTarget)
+      return { success: true }
+    }
+  } catch (e: any) { 
+    return { success: false, error: e.message } 
+  }
+})
+
+ipcMain.handle('import-data', async (event, { projectPath, env }: { projectPath: string, env: 'local' | 'remote' }) => {
+  try {
+    console.log(`[import-data] Opening dialog for project: ${projectPath}`)
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow!, {
+      properties: ['openFile'],
+      filters: [{ name: 'CSV Files', extensions: ['csv'] }]
+    })
+    
+    if (canceled || filePaths.length === 0) {
+      console.log('[import-data] Dialog canceled')
+      return { success: false, error: 'Canceled' }
+    }
+    
+    const sourcePath = filePaths[0]
+    const filename = sourcePath.split(/[\\/]/).pop()!
+    console.log(`[import-data] Importing: ${filename} from ${sourcePath}`)
+    const content = await readFile(sourcePath, 'utf8')
+    
+    if (env === 'local') {
+      const expandedPath = projectPath.startsWith('~/') ? join(homedir(), projectPath.slice(2)) : projectPath
+      await writeFile(join(expandedPath, 'data', filename), content)
+    } else {
+      if (!sshClient) throw new Error('No SSH connection')
+      const tempT = join(app.getPath('userData'), `temp_${filename}`)
+      await writeFile(tempT, content)
+      
+      let remoteTarget = `${projectPath}/data/${filename}`
+      if (remoteTarget.startsWith('~/')) {
+        remoteTarget = remoteTarget.slice(2)
+      }
+      await uploadFile(sshClient, tempT, remoteTarget)
+    }
+    
+    console.log(`[import-data] Successfully imported: ${filename}`)
+    return { success: true, filename }
+  } catch (e: any) {
+    console.error('[import-data] ERROR:', e)
+    return { success: false, error: e.message }
   }
 })
 

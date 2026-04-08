@@ -77,8 +77,7 @@ export default function App() {
         setConnectionStatus('disconnected')
       }}
     >
-      {activeTab === 'parameters' && <ParameterGrid />}
-      {activeTab === 'parameters' && <ParameterGrid />}
+      {activeTab === 'parameters' && <ParameterGrid projectPath={currentProject.path} env={currentProject.env} />}
       {activeTab === 'visualization' && <ConnectionViz projectPath={currentProject.path} env={currentProject.env} />}
       {activeTab === 'hooks' && <HookEditor projectPath={currentProject.path} env={currentProject.env} connectionStatus={connectionStatus} />}
       {activeTab === 'terminal' && <div className="content"><div style={{ color: 'var(--text3)' }}>Terminal panel placeholder</div></div>}
