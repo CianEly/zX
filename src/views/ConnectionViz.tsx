@@ -41,7 +41,7 @@ export function ConnectionViz() {
       if (env === 'local') {
         const res = await window.ipcRenderer.spawnLocalBackend()
         if (res.success) {
-          setSteps({ 1: { status: 'done', sub: 'local process running' }, 2: { status: 'done', sub: 'token auth ok' } })
+          setSteps({ 1: { status: 'done', sub: 'local process running' }, 5: { status: 'done', sub: 'token auth ok' } })
         }
       } else {
         await window.ipcRenderer.connectSsh({

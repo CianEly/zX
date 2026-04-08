@@ -46,16 +46,38 @@ const API_TOKEN = randomBytes(32).toString('hex')
 // Handle API config request from frontend
 ipcMain.handle('get-api-config', () => {
   return {
-    port: currentTunnelPort,
+    port: currentTunnelPort || API_PORT,
     token: API_TOKEN
   }
 })
 
 // Handle local backend spawning from frontend
-ipcMain.handle('spawn-local-backend', async () => {
+ipcMain.handle('spawn-local-backend', async (event) => {
   try {
     currentTunnelPort = null // Reset tunnel port so frontend falls back to API_PORT
     spawnBackend()
+    
+    // Wait for the backend to be healthy
+    let attempts = 0
+    let success = false
+    while (attempts < 10) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${API_PORT}/health`, {
+          headers: { Authorization: `Bearer ${API_TOKEN}` }
+        })
+        if (res.ok) {
+          success = true
+          break
+        }
+      } catch {}
+      attempts++
+      await new Promise(res => setTimeout(res, 500))
+    }
+
+    if (!success) {
+      return { success: false, error: 'Backend failed to start or health check timed out' }
+    }
+    
     return { success: true }
   } catch (e) {
     return { success: false, error: (e as Error).message }
