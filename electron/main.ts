@@ -148,7 +148,7 @@ function spawnBackend() {
 }
 
 // Remote SSH Connection & Bootstrapping
-ipcMain.handle('connect-ssh', async (event, { host: hostAlias, tunnelPort }) => {
+ipcMain.handle('connect-ssh', async (event, { host: hostAlias, tunnelPort, user, password, identityFile }) => {
 
 
   if (sshClient) sshClient.end()
@@ -157,6 +157,19 @@ ipcMain.handle('connect-ssh', async (event, { host: hostAlias, tunnelPort }) => 
   currentTunnelPort = tunnelPort
   const config = await getSSHConfigForHost(hostAlias)
   sshClient = new Client()
+
+  const sshUser = user || config.user
+  const sshIdentityFile = identityFile || config.identityFile
+  
+  let privateKey: Buffer | undefined
+  if (sshIdentityFile && !password) {
+    try {
+      const filePath = sshIdentityFile.startsWith('~/') ? join(homedir(), sshIdentityFile.slice(2)) : sshIdentityFile
+      privateKey = await readFile(filePath)
+    } catch(e) {
+      console.warn('Could not read identity file:', e)
+    }
+  }
 
   // ✅ STEP 1 → connecting
   event.sender.send('connection-progress', {
@@ -168,7 +181,7 @@ ipcMain.handle('connect-ssh', async (event, { host: hostAlias, tunnelPort }) => 
 
   return new Promise((resolve, reject) => {
     sshClient!.on('ready', () => {
-      console.log(`SSH Client Ready: ${config.user}@${config.host}`)
+      console.log(`SSH Client Ready: ${sshUser}@${config.host}`)
       event.sender.send('connection-progress', {
         step: 1,
         status: 'done',
@@ -191,9 +204,10 @@ ipcMain.handle('connect-ssh', async (event, { host: hostAlias, tunnelPort }) => 
     }).connect({
       host: config.host,
       port: config.port,
-      username: config.user,
-      password: "testpass", //testing serverconnectivity remove
-      //agent: process.env.SSH_AUTH_SOCK,
+      username: sshUser,
+      password: password || undefined,
+      privateKey: privateKey || undefined,
+      agent: (!password && !privateKey) ? process.env.SSH_AUTH_SOCK : undefined,
     })
   })
 })

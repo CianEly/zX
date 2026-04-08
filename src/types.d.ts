@@ -12,7 +12,7 @@ declare global {
       invoke: (channel: string, ...args: any[]) => Promise<any>;
       getApiConfig: () => Promise<ApiConfig>;
       getSshHosts: () => Promise<string[]>;
-      connectSsh: (params: { host: string; tunnelPort: number }) => Promise<{ success: boolean; error?: string }>;
+      connectSsh: (params: { host: string; tunnelPort: number; user?: string; password?: string; identityFile?: string }) => Promise<{ success: boolean; error?: string }>;
       spawnLocalBackend: () => Promise<{ success: boolean; error?: string }>;
       onConnectionProgress: (callback: (data: { step: number; status: string; sub?: string }) => void) => () => void;
     };

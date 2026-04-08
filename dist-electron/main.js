@@ -539,14 +539,30 @@ var API_PORT = process.env.ZX_PORT || "8000";
 var API_TOKEN = randomBytes(32).toString("hex");
 ipcMain.handle("get-api-config", () => {
 	return {
-		port: currentTunnelPort,
+		port: currentTunnelPort || API_PORT,
 		token: API_TOKEN
 	};
 });
-ipcMain.handle("spawn-local-backend", async () => {
+ipcMain.handle("spawn-local-backend", async (event) => {
 	try {
 		currentTunnelPort = null;
 		spawnBackend();
+		let attempts = 0;
+		let success = false;
+		while (attempts < 10) {
+			try {
+				if ((await fetch(`http://127.0.0.1:${API_PORT}/health`, { headers: { Authorization: `Bearer ${API_TOKEN}` } })).ok) {
+					success = true;
+					break;
+				}
+			} catch {}
+			attempts++;
+			await new Promise((res) => setTimeout(res, 500));
+		}
+		if (!success) return {
+			success: false,
+			error: "Backend failed to start or health check timed out"
+		};
 		return { success: true };
 	} catch (e) {
 		return {
@@ -607,12 +623,20 @@ function spawnBackend() {
 		});
 	});
 }
-ipcMain.handle("connect-ssh", async (event, { host: hostAlias, tunnelPort }) => {
+ipcMain.handle("connect-ssh", async (event, { host: hostAlias, tunnelPort, user, password, identityFile }) => {
 	if (sshClient) sshClient.end();
 	if (tunnelServer) tunnelServer.close();
 	currentTunnelPort = tunnelPort;
 	const config = await getSSHConfigForHost(hostAlias);
 	sshClient = new Client();
+	const sshUser = user || config.user;
+	const sshIdentityFile = identityFile || config.identityFile;
+	let privateKey;
+	if (sshIdentityFile && !password) try {
+		privateKey = await readFile(sshIdentityFile.startsWith("~/") ? join(homedir(), sshIdentityFile.slice(2)) : sshIdentityFile);
+	} catch (e) {
+		console.warn("Could not read identity file:", e);
+	}
 	event.sender.send("connection-progress", {
 		step: 1,
 		status: "active",
@@ -620,7 +644,7 @@ ipcMain.handle("connect-ssh", async (event, { host: hostAlias, tunnelPort }) => 
 	});
 	return new Promise((resolve, reject) => {
 		sshClient.on("ready", () => {
-			console.log(`SSH Client Ready: ${config.user}@${config.host}`);
+			console.log(`SSH Client Ready: ${sshUser}@${config.host}`);
 			event.sender.send("connection-progress", {
 				step: 1,
 				status: "done",
@@ -638,8 +662,10 @@ ipcMain.handle("connect-ssh", async (event, { host: hostAlias, tunnelPort }) => 
 		}).connect({
 			host: config.host,
 			port: config.port,
-			username: config.user,
-			password: "testpass"
+			username: sshUser,
+			password: password || void 0,
+			privateKey: privateKey || void 0,
+			agent: !password && !privateKey ? process.env.SSH_AUTH_SOCK : void 0
 		});
 	});
 });

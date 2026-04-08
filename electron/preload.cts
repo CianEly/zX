@@ -14,7 +14,7 @@ try {
     invoke: (channel: string, ...args: any[]) => ipcRenderer.invoke(channel, ...args),
     getApiConfig: () => ipcRenderer.invoke('get-api-config'),
     getSshHosts: () => ipcRenderer.invoke('get-ssh-hosts'),
-    connectSsh: (params: { host: string; tunnelPort: number }) => ipcRenderer.invoke('connect-ssh', params),
+    connectSsh: (params: { host: string; tunnelPort: number; user?: string; password?: string; identityFile?: string }) => ipcRenderer.invoke('connect-ssh', params),
     spawnLocalBackend: () => ipcRenderer.invoke('spawn-local-backend'),
     onConnectionProgress: (callback: (data: any) => void) => {
       const listener = (_event: any, data: any) => callback(data)

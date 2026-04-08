@@ -46,7 +46,9 @@ export function ConnectionViz() {
       } else {
         await window.ipcRenderer.connectSsh({
           host: selectedHost,
-          tunnelPort: parseInt(tunnelPort)
+          tunnelPort: parseInt(tunnelPort),
+          user: user || undefined,
+          identityFile: identityFile || undefined
         })
       }
     } catch (e) {
