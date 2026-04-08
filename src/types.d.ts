@@ -12,6 +12,14 @@ declare global {
       invoke: (channel: string, ...args: any[]) => Promise<any>;
       getApiConfig: () => Promise<ApiConfig>;
       getSshHosts: () => Promise<string[]>;
+      selectDirectory: () => Promise<{ canceled: boolean; filePaths: string[] }>;
+      getRecentProjects: () => Promise<string[]>;
+      addRecentProject: (params: { path: string; env: 'local' | 'remote' }) => Promise<string[]>;
+      initProject: (params: { path: string; env: 'local' | 'remote' }) => Promise<{ success: boolean; error?: string }>;
+      listHooks: (projectPath: string, env: 'local' | 'remote') => Promise<string[]>;
+      readHook: (projectPath: string, filename: string, env: 'local' | 'remote') => Promise<string>;
+      writeHook: (projectPath: string, filename: string, content: string, env: 'local' | 'remote') => Promise<{ success: boolean; error?: string }>;
+      disconnect: () => Promise<{ success: boolean }>;
       connectSsh: (params: { host: string; tunnelPort: number; user?: string; password?: string; identityFile?: string }) => Promise<{ success: boolean; error?: string }>;
       spawnLocalBackend: () => Promise<{ success: boolean; error?: string }>;
       onConnectionProgress: (callback: (data: { step: number; status: string; sub?: string }) => void) => () => void;

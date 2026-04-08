@@ -1,4 +1,4 @@
-import { Layers, Activity, Wrench, Terminal, Folder } from 'lucide-react';
+import { Layers, Activity, Wrench, Terminal, Folder, ArrowLeftRight } from 'lucide-react';
 import { StatusBar } from './StatusBar';
 
 interface SidebarProps {
@@ -6,9 +6,12 @@ interface SidebarProps {
   setActiveTab: (tab: string) => void;
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
   port?: string;
+  projectPath?: string;
+  onSwitchProject?: () => void;
 }
 
-export function Sidebar({ activeTab, setActiveTab, connectionStatus, port }: SidebarProps) {
+export function Sidebar({ activeTab, setActiveTab, connectionStatus, port, projectPath, onSwitchProject }: SidebarProps) {
+  const projectName = projectPath ? projectPath.split('/').pop() : 'No Project'
   return (
     <div className="sidebar">
       <div className="logo">
@@ -17,7 +20,19 @@ export function Sidebar({ activeTab, setActiveTab, connectionStatus, port }: Sid
         <div className="logo-ver">v0.1</div>
       </div>
       <nav className="nav">
-        <div className="nav-section">workspace</div>
+        <div className="nav-section" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>workspace · {projectName}</span>
+          {onSwitchProject && (
+            <button 
+              className="icon-btn" 
+              onClick={onSwitchProject}
+              title="Switch Project"
+              style={{ padding: '2px', borderRadius: '4px', background: 'transparent', border: 'none', color: 'var(--text3)', cursor: 'pointer' }}
+            >
+              <ArrowLeftRight size={12} />
+            </button>
+          )}
+        </div>
         <div 
           className={`nav-item ${activeTab === 'parameters' ? 'active' : ''}`}
           onClick={() => setActiveTab('parameters')}

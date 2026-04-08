@@ -1,16 +1,26 @@
 import { useState, useEffect } from 'react'
 import { Activity } from 'lucide-react'
 
-export function ConnectionViz() {
-  const [env, setEnv] = useState<'local' | 'remote'>('local')
+interface ConnectionVizProps {
+  projectPath: string;
+  env: 'local' | 'remote';
+}
+
+export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizProps) {
+  const [env, setEnv] = useState<'local' | 'remote'>(initialEnv)
   const [sshHosts, setSshHosts] = useState<string[]>([])
   const [selectedHost, setSelectedHost] = useState('')
   const [tunnelPort, setTunnelPort] = useState('18432')
   const [user, setUser] = useState('')
   const [identityFile, setIdentityFile] = useState('~/.ssh/id_ed25519')
-  const [projectDir, setProjectDir] = useState('~/zX-project')
+  const [projectDir, setProjectDir] = useState(projectPath)
   const [isConnecting, setIsConnecting] = useState(false)
   const [steps, setSteps] = useState<Record<number, { status: string; sub?: string }>>({})
+
+  useEffect(() => {
+    setEnv(initialEnv)
+    setProjectDir(projectPath)
+  }, [projectPath, initialEnv])
 
   useEffect(() => {
     window.ipcRenderer.getSshHosts().then(hosts => {
@@ -44,12 +54,16 @@ export function ConnectionViz() {
           setSteps({ 1: { status: 'done', sub: 'local process running' }, 5: { status: 'done', sub: 'token auth ok' } })
         }
       } else {
-        await window.ipcRenderer.connectSsh({
+        const res = await window.ipcRenderer.connectSsh({
           host: selectedHost,
           tunnelPort: parseInt(tunnelPort),
           user: user || undefined,
           identityFile: identityFile || undefined
         })
+        if (res.success) {
+          // Scaffold remote project now that we have a connection
+          await window.ipcRenderer.initProject({ path: projectDir, env: 'remote' })
+        }
       }
     } catch (e) {
       console.error('Connection error:', e)

@@ -4,7 +4,8 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { readFile, access } from 'node:fs/promises'
+import { readFile, access, writeFile, mkdir, readdir } from 'node:fs/promises'
+import { hookTemplates } from './templates'
 import { constants } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import * as net from 'node:net'
@@ -49,6 +50,23 @@ ipcMain.handle('get-api-config', () => {
     port: currentTunnelPort || API_PORT,
     token: API_TOKEN
   }
+})
+
+ipcMain.handle('disconnect', async () => {
+  if (backendProcess) {
+    backendProcess.kill()
+    backendProcess = null
+  }
+  if (sshClient) {
+    sshClient.end()
+    sshClient = null
+  }
+  if (tunnelServer) {
+    tunnelServer.close()
+    tunnelServer = null
+  }
+  currentTunnelPort = null
+  return { success: true }
 })
 
 // Handle local backend spawning from frontend
@@ -104,6 +122,152 @@ ipcMain.handle('get-ssh-hosts', async () => {
   } catch (e) {
     console.error('Error reading SSH config:', e)
     return []
+  }
+})
+
+// Handle recent projects
+ipcMain.handle('get-recent-projects', async () => {
+  const settingsPath = join(app.getPath('userData'), 'recent-projects.json')
+  try {
+    const content = await readFile(settingsPath, 'utf8')
+    let projects = JSON.parse(content)
+    if (Array.isArray(projects) && projects.length > 0 && typeof projects[0] === 'string') {
+      return projects.map(p => ({ path: p, env: 'local' }))
+    }
+    return projects
+  } catch {
+    return []
+  }
+})
+
+ipcMain.handle('add-recent-project', async (event, { path, env }: { path: string, env: 'local' | 'remote' }) => {
+  const settingsPath = join(app.getPath('userData'), 'recent-projects.json')
+  let projects: { path: string, env: 'local' | 'remote' }[] = []
+  try {
+    const content = await readFile(settingsPath, 'utf8')
+    projects = JSON.parse(content)
+    // Basic migration if it was a flat array
+    if (projects.length > 0 && typeof projects[0] === 'string') {
+      projects = (projects as any).map((p: string) => ({ path: p, env: 'local' }))
+    }
+  } catch {}
+  projects = [{ path, env }, ...projects.filter(p => p.path !== path)].slice(0, 10)
+  await writeFile(settingsPath, JSON.stringify(projects))
+  return projects
+})
+
+ipcMain.handle('init-project', async (event, { path: projectPath, env }: { path: string, env: 'local' | 'remote' }) => {
+  try {
+    if (env === 'local') {
+      const expandedPath = projectPath.startsWith('~/') ? join(homedir(), projectPath.slice(2)) : projectPath
+      await mkdir(expandedPath, { recursive: true })
+      await mkdir(join(expandedPath, 'hooks'), { recursive: true })
+      await mkdir(join(expandedPath, 'data'), { recursive: true })
+      
+      for (const [filename, content] of Object.entries(hookTemplates)) {
+        try { await access(join(expandedPath, 'hooks', filename), constants.R_OK) } 
+        catch { await writeFile(join(expandedPath, 'hooks', filename), content) }
+      }
+      return { success: true }
+    } else {
+      if (!sshClient) throw new Error('No active SSH connection')
+      await executeRemote(sshClient, `mkdir -p ${projectPath}/hooks ${projectPath}/data`)
+      const tempPath = join(app.getPath('userData'), 'temp_hooks')
+      await mkdir(tempPath, { recursive: true })
+      
+      for (const [filename, content] of Object.entries(hookTemplates)) {
+        const remoteFile = `${projectPath}/hooks/${filename}`
+        // Check if file exists before overwriting
+        const exists = await new Promise<boolean>((resolve) => {
+          sshClient!.exec(`[ -f ${remoteFile} ] && echo "exists"`, (err, stream) => {
+            if (err) return resolve(false)
+            let out = ''
+            stream.on('data', (d) => out += d.toString())
+            stream.on('close', () => resolve(out.includes('exists')))
+          })
+        })
+
+        if (!exists) {
+          console.log(`[init-project] Scaffolding missing hook: ${remoteFile}`)
+          const localT = join(tempPath, filename)
+          await writeFile(localT, content)
+          await uploadFile(sshClient, localT, remoteFile).catch(() => null)
+        }
+      }
+      return { success: true }
+    }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+})
+
+ipcMain.handle('list-hooks', async (event, { projectPath, env }: { projectPath: string, env: 'local' | 'remote' }) => {
+  try {
+    if (env === 'local') {
+      const expandedPath = projectPath.startsWith('~/') ? join(homedir(), projectPath.slice(2)) : projectPath
+      const files = await readdir(join(expandedPath, 'hooks'))
+      return files.filter(f => f.endsWith('.py'))
+    } else {
+      if (!sshClient) return []
+      return new Promise((resolve) => {
+        sshClient!.exec(`ls ${projectPath}/hooks/*.py`, (err, stream) => {
+          if (err) return resolve([])
+          let data = ''
+          stream.on('data', (d: any) => data += d.toString())
+          stream.on('close', () => {
+            const files = data.trim().split('\n').map(f => f.split('/').pop()!).filter(f => f)
+            resolve(files)
+          })
+        })
+      })
+    }
+  } catch { return [] }
+})
+
+ipcMain.handle('read-hook', async (event, { projectPath, filename, env }: { projectPath: string, filename: string, env: 'local' | 'remote' }) => {
+  try {
+    if (env === 'local') {
+      const expandedPath = projectPath.startsWith('~/') ? join(homedir(), projectPath.slice(2)) : projectPath
+      return await readFile(join(expandedPath, 'hooks', filename), 'utf8')
+    } else {
+      if (!sshClient) throw new Error('No SSH connection')
+      return new Promise((resolve, reject) => {
+        sshClient!.exec(`cat ${projectPath}/hooks/${filename}`, (err, stream) => {
+          if (err) return reject(err)
+          let data = ''
+          stream.on('data', (d: any) => data += d.toString())
+          stream.on('close', () => resolve(data))
+        })
+      })
+    }
+  } catch (e: any) { return `# Error reading hook: ${e.message}` }
+})
+
+ipcMain.handle('write-hook', async (event, { projectPath, filename, content, env }: { projectPath: string, filename: string, content: string, env: 'local' | 'remote' }) => {
+  try {
+    if (env === 'local') {
+      const expandedPath = projectPath.startsWith('~/') ? join(homedir(), projectPath.slice(2)) : projectPath
+      await writeFile(join(expandedPath, 'hooks', filename), content)
+      return { success: true }
+    } else {
+      if (!sshClient) throw new Error('No SSH connection')
+      console.log(`[write-hook] Remote save attempt: ${projectPath}/hooks/${filename}`)
+      const tempT = join(app.getPath('userData'), `temp_${filename}`)
+      await writeFile(tempT, content)
+      
+      let remoteTarget = `${projectPath}/hooks/${filename}`
+      if (remoteTarget.startsWith('~/')) {
+        remoteTarget = remoteTarget.slice(2)
+      }
+
+      console.log(`[write-hook] SFTP upload to: ${remoteTarget}`)
+      await uploadFile(sshClient, tempT, remoteTarget)
+      console.log(`[write-hook] Success: ${remoteTarget}`)
+      return { success: true }
+    }
+  } catch (e: any) { 
+    console.error('[write-hook] ERROR:', e)
+    return { success: false, error: e.message } 
   }
 })
 
