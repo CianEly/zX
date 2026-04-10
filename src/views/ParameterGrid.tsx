@@ -17,6 +17,7 @@ export function ParameterGrid({ projectPath, env }: ParameterGridProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [filterText, setFilterText] = useState('')
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
 
   // Helper to render icons safely
   const Icon = ({ name, size = 16, className = "" }: { name: string, size?: number, className?: string }) => {
@@ -117,10 +118,18 @@ export function ParameterGrid({ projectPath, env }: ParameterGridProps) {
         breadcrumb="workspace" 
         onImport={handleImport}
       />
-      <div className="content" style={{ flexDirection: 'row', padding: 0, display: 'flex', height: 'calc(100vh - 48px)' }}>
+      <div className={`content ${isSidebarCollapsed ? 'sidebar-collapsed' : ''}`} style={{ flexDirection: 'row', padding: 0, display: 'flex', height: 'calc(100vh - 48px)', position: 'relative' }}>
         {/* Left Sidebar: Data Files */}
-        <div className="data-sidebar" style={{ width: 240, borderRight: '1px solid var(--border)', background: '#0D0E12', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
+        <div className="data-sidebar" style={{ 
+          width: isSidebarCollapsed ? 0 : 240, 
+          borderRight: isSidebarCollapsed ? 'none' : '1px solid var(--border)', 
+          background: '#0D0E12', 
+          display: 'flex', 
+          flexDirection: 'column',
+          overflow: 'hidden',
+          transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s'
+        }}>
+          <div style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', minWidth: 240 }}>
             <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text3)' }}>Data Files</span>
             <div style={{ display: 'flex', gap: 8 }}>
               <button 
@@ -138,7 +147,7 @@ export function ParameterGrid({ projectPath, env }: ParameterGridProps) {
               </button>
             </div>
           </div>
-          <div style={{ flex: 1, overflowY: 'auto' }}>
+          <div style={{ flex: 1, overflowY: 'auto', minWidth: 240 }}>
             {dataFiles.map(file => (
               <div 
                 key={file}
@@ -167,6 +176,32 @@ export function ParameterGrid({ projectPath, env }: ParameterGridProps) {
               </div>
             )}
           </div>
+        </div>
+
+        {/* Sidebar Toggle Handle */}
+        <div 
+          onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          style={{
+            position: 'absolute',
+            left: isSidebarCollapsed ? 0 : 240,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            width: 20,
+            height: 40,
+            background: 'var(--border)',
+            border: '1px solid var(--border)',
+            borderRadius: '0 4px 4px 0',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            zIndex: 100,
+            transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+            color: 'var(--text3)'
+          }}
+          className="sidebar-toggle"
+        >
+          <Icon name={isSidebarCollapsed ? "ChevronRight" : "ChevronLeft"} size={14} />
         </div>
 
         {/* Main Area: Grid */}
@@ -311,6 +346,11 @@ export function ParameterGrid({ projectPath, env }: ParameterGridProps) {
         @keyframes spin {
           from { transform: rotate(0deg); }
           to { transform: rotate(360deg); }
+        }
+
+        .sidebar-toggle:hover {
+          background: #1A1B20 !important;
+          color: var(--accent) !important;
         }
       `}</style>
     </>

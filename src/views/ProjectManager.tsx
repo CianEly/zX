@@ -6,7 +6,7 @@ interface ProjectManagerProps {
 }
 
 export function ProjectManager({ onProjectSelect }: ProjectManagerProps) {
-  const [recentProjects, setRecentProjects] = useState<string[]>([])
+  const [recentProjects, setRecentProjects] = useState<{ path: string; env: 'local' | 'remote' }[]>([])
   const [newProjectPath, setNewProjectPath] = useState('')
   const [env, setEnv] = useState<'local' | 'remote'>('local')
   const [isLoading, setIsLoading] = useState(false)
@@ -61,7 +61,7 @@ export function ProjectManager({ onProjectSelect }: ProjectManagerProps) {
             </div>
             <div className="recent-list">
               {recentProjects.length > 0 ? (
-                recentProjects.map((proj: any) => (
+                recentProjects.map((proj) => (
                   <div key={proj.path} className="recent-item" onClick={() => onProjectSelect(proj.path, proj.env)}>
                     <Folder size={20} className="folder-icon" />
                     <div className="item-details">

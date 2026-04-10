@@ -1,0 +1,22 @@
+id,complex_data
+1,"Value with , comma"
+2,"Value with "" quotes"
+3,Value with \n newline
+4,
+5, Leading space
+6,Trailing space 
+7,  Both sides  
+8,"Value with , and "" quotes"
+9,Value with \t tab
+10,"Multi-line
+actual newline"
+11,"Comma, ""quotes"", and \n all together"
+12,"\""Escaped-looking\"" text"
+13,Value with unicode ✓
+14,Value with emoji 🚀
+15,Value with CRLF\r\nnewline
+16,Value with backslash \\ character
+17,"Value,with,multiple,commas"
+18,"""Starts and ends with quotes"""
+19, 
+20,End

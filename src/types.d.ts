@@ -13,8 +13,8 @@ declare global {
       getApiConfig: () => Promise<ApiConfig>;
       getSshHosts: () => Promise<string[]>;
       selectDirectory: () => Promise<{ canceled: boolean; filePaths: string[] }>;
-      getRecentProjects: () => Promise<string[]>;
-      addRecentProject: (params: { path: string; env: 'local' | 'remote' }) => Promise<string[]>;
+      getRecentProjects: () => Promise<{ path: string; env: 'local' | 'remote' }[]>;
+      addRecentProject: (params: { path: string; env: 'local' | 'remote' }) => Promise<{ path: string; env: 'local' | 'remote' }[]>;
       initProject: (params: { path: string; env: 'local' | 'remote' }) => Promise<{ success: boolean; error?: string }>;
       listHooks: (projectPath: string, env: 'local' | 'remote') => Promise<string[]>;
       readHook: (projectPath: string, filename: string, env: 'local' | 'remote') => Promise<string>;

@@ -16,7 +16,7 @@ try {
     getSshHosts: () => ipcRenderer.invoke('get-ssh-hosts'),
     selectDirectory: () => ipcRenderer.invoke('select-directory'),
     getRecentProjects: () => ipcRenderer.invoke('get-recent-projects'),
-    addRecentProject: (path: string) => ipcRenderer.invoke('add-recent-project', path),
+    addRecentProject: (params: { path: string; env: 'local' | 'remote' }) => ipcRenderer.invoke('add-recent-project', params),
     initProject: (params: { path: string; env: 'local' | 'remote' }) => ipcRenderer.invoke('init-project', params),
     listHooks: (projectPath: string, env: 'local' | 'remote') => ipcRenderer.invoke('list-hooks', { projectPath, env }),
     readHook: (projectPath: string, filename: string, env: 'local' | 'remote') => ipcRenderer.invoke('read-hook', { projectPath, filename, env }),

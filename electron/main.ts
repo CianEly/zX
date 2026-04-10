@@ -125,6 +125,13 @@ ipcMain.handle('get-ssh-hosts', async () => {
   }
 })
 
+ipcMain.handle('select-directory', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow!, {
+    properties: ['openDirectory'],
+  })
+  return { canceled, filePaths }
+})
+
 // Handle recent projects
 ipcMain.handle('get-recent-projects', async () => {
   const settingsPath = join(app.getPath('userData'), 'recent-projects.json')
