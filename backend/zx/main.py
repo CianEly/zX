@@ -67,12 +67,15 @@ async def health_check():
     return {"status": "ok", "version": "0.1.0"}
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):
-    # Note: Simple token check via query param for WS
-    if EXPECTED_TOKEN and token != EXPECTED_TOKEN:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-        
+async def websocket_endpoint(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    if EXPECTED_TOKEN:
+        print(f"[Debug] WS connect. Expected: {EXPECTED_TOKEN[:5]}... Received: {token[:5] if token else 'None'}...")
+        if token != EXPECTED_TOKEN:
+            print("[Debug] WS Token Mismatch!")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+            
     await manager.connect(websocket)
     try:
         while True:

@@ -1,12 +1,19 @@
 import subprocess
-from pathlib import Path
-
-def launch(row: dict, state: dict, run_dir: Path) -> subprocess.CompletedProcess:
-    """Launch the CLI application in run_dir. Returns the completed process."""
-    # Example: run a bash script or python command
-    # result = subprocess.run(["python", "-c", "print('hello world')"], cwd=run_dir, capture_output=True, text=True)
-    # return result
-    
-    # Simple placeholder: just create a DONE file
-    (run_dir / "DONE").touch()
-    return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+import sys
+def launch(row, state, run_dir):
+    # This simulates a complex math solver
+    script = """
+import json
+import math
+with open('input.json', 'r') as f:
+    data = json.load(f)
+x = data['x']
+y = data['y']
+# Six-hump camel function: 
+# f(x,y) = (4 - 2.1*x^2 + x^4/3)*x^2 + x*y + (-4 + 4*y^2)*y^2
+z = (4 - 2.1*x**2 + x**4/3)*x**2 + x*y + (-4 + 4*y**2)*y**2
+with open('results.json', 'w') as f:
+    json.dump({'result': z}, f)
+"""
+    # Run the script inside the run directory
+    subprocess.run([sys.executable, "-c", script], cwd=run_dir, check=True)

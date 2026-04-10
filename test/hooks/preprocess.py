@@ -1,8 +1,5 @@
-import os
-from pathlib import Path
-
-def preprocess(row: dict, state: dict, run_dir: Path) -> None:
-    """Prepare input files/config in run_dir for the CLI application."""
-    # Example: write a simple config file
-    with open(run_dir / "input.csv", "w") as f:
-        f.write(f"x1,x2\n{row.get('x1', 0)},{row.get('x2', 0)}\n")
+def preprocess(row, state, run_dir):
+    # Pass the x and y values to the simulation
+    with open(run_dir / "input.json", "w") as f:
+        import json
+        json.dump({"x": float(row['x']), "y": float(row['y'])}, f)

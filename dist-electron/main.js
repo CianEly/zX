@@ -727,11 +727,18 @@ ipcMain.handle("get-recent-projects", async () => {
 	try {
 		const content = await readFile(settingsPath, "utf8");
 		let projects = JSON.parse(content);
-		if (Array.isArray(projects) && projects.length > 0 && typeof projects[0] === "string") return projects.map((p) => ({
+		if (Array.isArray(projects) && projects.length > 0 && typeof projects[0] === "string") projects = projects.map((p) => ({
 			path: p,
 			env: "local"
 		}));
-		return projects;
+		const filtered = [];
+		for (const proj of projects) if (proj.env === "local") try {
+			await access(resolvePath(proj.path), constants.R_OK);
+			filtered.push(proj);
+		} catch {}
+		else filtered.push(proj);
+		if (filtered.length !== projects.length) await writeFile(settingsPath, JSON.stringify(filtered));
+		return filtered;
 	} catch {
 		return [];
 	}
@@ -754,6 +761,18 @@ ipcMain.handle("add-recent-project", async (event, { path: rawPath, env }) => {
 	}, ...projects.filter((p) => p.path !== path)].slice(0, 10);
 	await writeFile(settingsPath, JSON.stringify(projects));
 	return projects;
+});
+ipcMain.handle("remove-recent-project", async (event, path) => {
+	const settingsPath = join(app.getPath("userData"), "recent-projects.json");
+	try {
+		const content = await readFile(settingsPath, "utf8");
+		let projects = JSON.parse(content);
+		projects = projects.filter((p) => p.path !== path);
+		await writeFile(settingsPath, JSON.stringify(projects));
+		return projects;
+	} catch {
+		return [];
+	}
 });
 ipcMain.handle("init-project", async (event, { path: rawPath, env }) => {
 	try {
@@ -1066,11 +1085,11 @@ async function setupRemoteEnvironment(conn, localPort, webContents) {
 		sendProgress(2, "done", "uv installed");
 		await executeRemote(conn, "mkdir -p ~/.zx/backend");
 		sendProgress(3, "active", "deploying backend wheel...");
-		await uploadFile(conn, join(_dirname, "..", "backend", "dist", "zx_backend-0.1.0-py3-none-any.whl"), ".zx/backend/zx_backend-0.1.0-py3-none-any.whl");
+		await uploadFile(conn, join(_dirname, "..", "backend", "dist", "zx_backend-0.1.2-py3-none-any.whl"), ".zx/backend/zx_backend-0.1.2-py3-none-any.whl");
 		sendProgress(3, "done", "backend deployed");
 		sendProgress(4, "active", "setting up python venv...");
 		await executeRemote(conn, "~/.local/bin/uv venv ~/.zx/python --clear");
-		await executeRemote(conn, "export PATH=\"$HOME/.local/bin:$PATH\" && ~/.local/bin/uv pip install ~/.zx/backend/zx_backend-0.1.0-py3-none-any.whl --python ~/.zx/python/bin/python");
+		await executeRemote(conn, "export PATH=\"$HOME/.local/bin:$PATH\" && ~/.local/bin/uv pip install ~/.zx/backend/zx_backend-0.1.2-py3-none-any.whl --python ~/.zx/python/bin/python");
 		sendProgress(4, "done", "venv ready");
 		await executeRemote(conn, "pkill -f 'zx.main' || true");
 		sendProgress(5, "active", "starting remote server...");

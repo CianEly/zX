@@ -34,13 +34,14 @@ class ExecutionRunner:
         self.current_task = None
         self.state = {}
 
-    async def _emit_update(self, row_id: int, status: str, stage: str = "", error: str = ""):
+    async def _emit_update(self, row_id: int, status: str, stage: str = "", error: str = "", extra_data: Dict = None):
         if self.on_update:
             data = {
                 "row_id": int(row_id),
                 "status": status,
                 "stage": stage,
                 "error": error,
+                "extra_data": extra_data or {},
                 "updated_at": datetime.now().isoformat()
             }
             if asyncio.iscoroutinefunction(self.on_update):
@@ -135,12 +136,13 @@ class ExecutionRunner:
         run_dir = self._setup_run_dir(row_id)
         
         # Start
-        await self._emit_update(row_id, "running", "starting")
-        self._update_csv(row_id, {
+        start_updates = {
             "_zx_status": "running",
             "_zx_started_at": datetime.now().isoformat(),
             "_zx_run_dir": str(run_dir)
-        })
+        }
+        await self._emit_update(row_id, "running", "starting", extra_data=start_updates)
+        self._update_csv(row_id, start_updates)
 
         df = pd.read_csv(self.db_path)
         if "_zx_row_id" in df.columns:
@@ -158,7 +160,7 @@ class ExecutionRunner:
             for stage_name, hook_func in stages:
                 if self.should_stop: return
                 
-                await self._emit_update(row_id, "running", stage_name)
+                await self._emit_update(row_id, "running", stage_name, extra_data={"_zx_hook_stage": stage_name})
                 self._update_csv(row_id, {"_zx_hook_stage": stage_name})
 
                 if hook_func:
@@ -176,24 +178,32 @@ class ExecutionRunner:
                                 self._update_csv(row_id, result)
                                 # Update row_dict for potential subsequent hooks in same loop
                                 row_dict.update(result)
+                                # Broadcast results immediately
+                                await self._emit_update(row_id, "running", stage_name, extra_data=result)
 
             # Success
-            await self._emit_update(row_id, "completed")
-            self._update_csv(row_id, {
+            success_updates = {
                 "_zx_status": "completed",
                 "_zx_hook_stage": "",
                 "_zx_completed_at": datetime.now().isoformat()
-            })
+            }
+            await self._emit_update(row_id, "completed", extra_data=success_updates)
+            self._update_csv(row_id, success_updates)
 
         except Exception as e:
-            err_msg = traceback.format_exc()
-            print(f"Error executing row {row_id}: {err_msg}")
-            await self._emit_update(row_id, "failed", error=str(e))
-            self._update_csv(row_id, {
-                "_zx_status": "failed",
+            err_msg = str(e)
+            trace = traceback.format_exc()
+            print(f"Error executing row {row_id}: {trace}")
+            
+            # Broadcast error and save to CSV
+            error_updates = {
+                "_zx_status": "error",
                 "_zx_error": err_msg,
+                "_zx_hook_stage": stage_name if 'stage_name' in locals() else "unknown",
                 "_zx_completed_at": datetime.now().isoformat()
-            })
+            }
+            await self._emit_update(row_id, "error", error=err_msg, extra_data=error_updates)
+            self._update_csv(row_id, error_updates)
 
     def stop(self):
         self.should_stop = True

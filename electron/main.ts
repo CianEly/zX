@@ -171,9 +171,22 @@ ipcMain.handle('get-recent-projects', async () => {
     const content = await readFile(settingsPath, 'utf8')
     let projects = JSON.parse(content)
     if (Array.isArray(projects) && projects.length > 0 && typeof projects[0] === 'string') {
-      return projects.map(p => ({ path: p, env: 'local' }))
+      projects = projects.map((p: string) => ({ path: p, env: 'local' }))
     }
-    return projects
+    // Auto-filter local projects whose folders no longer exist
+    const filtered: typeof projects = []
+    for (const proj of projects) {
+      if (proj.env === 'local') {
+        try { await access(resolvePath(proj.path), constants.R_OK); filtered.push(proj) } catch {}
+      } else {
+        filtered.push(proj)
+      }
+    }
+    // Persist the cleaned-up list
+    if (filtered.length !== projects.length) {
+      await writeFile(settingsPath, JSON.stringify(filtered))
+    }
+    return filtered
   } catch {
     return []
   }
@@ -194,6 +207,19 @@ ipcMain.handle('add-recent-project', async (event, { path: rawPath, env }: { pat
   projects = [{ path, env }, ...projects.filter(p => p.path !== path)].slice(0, 10)
   await writeFile(settingsPath, JSON.stringify(projects))
   return projects
+})
+
+ipcMain.handle('remove-recent-project', async (event, path: string) => {
+  const settingsPath = join(app.getPath('userData'), 'recent-projects.json')
+  try {
+    const content = await readFile(settingsPath, 'utf8')
+    let projects: { path: string, env: 'local' | 'remote' }[] = JSON.parse(content)
+    projects = projects.filter(p => p.path !== path)
+    await writeFile(settingsPath, JSON.stringify(projects))
+    return projects
+  } catch {
+    return []
+  }
 })
 
 ipcMain.handle('init-project', async (event, { path: rawPath, env }: { path: string, env: 'local' | 'remote' }) => {
@@ -539,8 +565,8 @@ async function setupRemoteEnvironment(conn: Client, localPort: number, webConten
 
     // 3. SFTP the wheel
     sendProgress(3, 'active', 'deploying backend wheel...')
-    const localWheel = join(_dirname, '..', 'backend', 'dist', 'zx_backend-0.1.0-py3-none-any.whl')
-    await uploadFile(conn, localWheel, '.zx/backend/zx_backend-0.1.0-py3-none-any.whl')
+    const localWheel = join(_dirname, '..', 'backend', 'dist', 'zx_backend-0.1.2-py3-none-any.whl')
+    await uploadFile(conn, localWheel, '.zx/backend/zx_backend-0.1.2-py3-none-any.whl')
     sendProgress(3, 'done', 'backend deployed')
 
     // 4. Install wheel into venv
@@ -548,7 +574,7 @@ async function setupRemoteEnvironment(conn: Client, localPort: number, webConten
     await executeRemote(conn, '~/.local/bin/uv venv ~/.zx/python --clear')
     await executeRemote(
       conn,
-      'export PATH="$HOME/.local/bin:$PATH" && ~/.local/bin/uv pip install ~/.zx/backend/zx_backend-0.1.0-py3-none-any.whl --python ~/.zx/python/bin/python'
+      'export PATH="$HOME/.local/bin:$PATH" && ~/.local/bin/uv pip install ~/.zx/backend/zx_backend-0.1.2-py3-none-any.whl --python ~/.zx/python/bin/python'
     )
     sendProgress(4, 'done', 'venv ready')
 

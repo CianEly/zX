@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Topbar } from '../components/Topbar'
 import * as Icons from 'lucide-react'
 import { parseCsv, stringifyCsv } from '../utils/csv'
@@ -7,10 +7,11 @@ import type { CsvData } from '../utils/csv'
 interface ParameterGridProps {
   projectPath: string;
   env: 'local' | 'remote';
-  lastRowUpdate?: any;
+  messageQueueRef?: { current: any[] };
+  messageSeq?: number;
 }
 
-export function ParameterGrid({ projectPath, env, lastRowUpdate }: ParameterGridProps) {
+export function ParameterGrid({ projectPath, env, messageQueueRef, messageSeq }: ParameterGridProps) {
   const [dataFiles, setDataFiles] = useState<string[]>([])
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [csvData, setCsvData] = useState<CsvData | null>(null)
@@ -69,26 +70,49 @@ export function ParameterGrid({ projectPath, env, lastRowUpdate }: ParameterGrid
     loadData()
   }, [selectedFile, projectPath, env])
 
+  // Track how many messages we've already processed from the ref-based queue
+  const processedUntilRef = useRef(0)
+
   // Handle real-time updates from global WebSocket in App.tsx
   useEffect(() => {
-    if (!lastRowUpdate || !csvData) return
-    
+    if (!messageQueueRef?.current || !csvData) return
+
+    const queue = messageQueueRef.current
+    const unprocessed = queue.slice(processedUntilRef.current)
+    if (unprocessed.length === 0) return
+
     setCsvData(prev => {
       if (!prev || !prev.rows) return prev;
       const newRows = [...prev.rows];
-      const idx = prev.rows.findIndex(r => parseInt(r._zx_row_id || '-1') === lastRowUpdate.row_id);
-      
-      if (idx !== -1) {
-        newRows[idx] = { 
-          ...newRows[idx], 
-          _zx_status: lastRowUpdate.status, 
-          _zx_hook_stage: lastRowUpdate.stage,
-          _zx_error: lastRowUpdate.error 
-        };
+      let newHeaders = [...prev.headers];
+
+      for (const update of unprocessed) {
+        const idx = newRows.findIndex(r => parseInt(r._zx_row_id || '-1') === update.row_id);
+        if (idx !== -1) {
+          const merged = {
+            ...newRows[idx],
+            _zx_status: update.status,
+            _zx_hook_stage: update.stage,
+            _zx_error: update.error,
+            ...(update.extra_data || {})
+          };
+          newRows[idx] = merged;
+
+          // Add any new columns from extra_data to headers so the table renders them
+          for (const key of Object.keys(update.extra_data || {})) {
+            if (!newHeaders.includes(key) && !key.startsWith('_zx_')) {
+              newHeaders = [...newHeaders, key];
+            }
+          }
+        }
       }
-      return { ...prev, rows: newRows };
+
+      return { ...prev, headers: newHeaders, rows: newRows };
     });
-  }, [lastRowUpdate]);
+
+    // Advance our read pointer - never resets, so messages can never be re-processed or lost
+    processedUntilRef.current = queue.length;
+  }, [messageSeq, csvData]);
 
   const handleSave = async () => {
     if (!selectedFile || !csvData) return

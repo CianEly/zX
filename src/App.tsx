@@ -12,108 +12,97 @@ export default function App() {
   const [currentProject, setCurrentProject] = useState<{ path: string; env: 'local' | 'remote' } | null>(null)
 
 
-  const [lastRowUpdate, setLastRowUpdate] = useState<any>(null)
+  const messageQueueRef = useRef<any[]>([])
+  const [messageSeq, setMessageSeq] = useState(0)
   const socketRef = useRef<WebSocket | null>(null)
-  const reconnectTimeoutRef = useRef<any>(null)
 
+  // 1. Fetch config and check health (Stable Polling)
   useEffect(() => {
-    const fetchConfig = async () => {
+    const fetchAndCheck = async () => {
       try {
         const config = await window.ipcRenderer.getApiConfig()
-        if (config) {
-          setApiConfig(prev => {
-            if (prev?.port === config.port && prev?.token === config.token) return prev
-            return config
-          })
+        if (!config) return
+
+        // Only update if values actually change to prevent re-renders
+        setApiConfig(prev => {
+          if (prev && prev.token === config.token && prev.port === config.port) return prev;
+          
+          if (prev) {
+            console.log('App: API Config changed, resetting connection...')
+            setConnectionStatus('disconnected')
+            if (socketRef.current) socketRef.current.close()
+          }
+          return config
+        })
+
+        const res = await fetch(`http://127.0.0.1:${config.port}/health`, {
+          headers: { Authorization: `Bearer ${config.token}` }
+        })
+
+        if (res.ok) {
+          setConnectionStatus(prev => prev !== 'connected' ? 'connected' : prev)
+        } else {
+          setConnectionStatus(prev => prev !== 'disconnected' ? 'disconnected' : prev)
         }
       } catch (e) {
-        console.error('Error fetching API config:', e)
+        setConnectionStatus(prev => prev !== 'disconnected' ? 'disconnected' : prev)
       }
     }
 
-    fetchConfig()
-    const interval = setInterval(fetchConfig, 3000)
+    fetchAndCheck()
+    const interval = setInterval(fetchAndCheck, 5000) // Slowed to 5s
     return () => clearInterval(interval)
-  }, [])
+  }, []) // Empty dependency array means it only starts once
 
-  // Persistent WebSocket for row updates
+  // 2. Manage WebSocket based on connection status
   useEffect(() => {
-    if (!apiConfig || connectionStatus !== 'connected') {
+    if (connectionStatus !== 'connected' || !apiConfig) {
       if (socketRef.current) {
+        console.log('App: Closing WebSocket (disconnected)')
         socketRef.current.close()
         socketRef.current = null
       }
       return
     }
 
-    const connect = () => {
-      if (socketRef.current && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
-        return
-      }
+    if (socketRef.current && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
+      return
+    }
 
-      const wsUrl = `ws://127.0.0.1:${apiConfig.port}/ws?token=${apiConfig.token}`
-      console.log('App: Connecting WebSocket...')
-      const socket = new WebSocket(wsUrl)
-      socketRef.current = socket
+    const wsUrl = `ws://127.0.0.1:${apiConfig.port}/ws?token=${apiConfig.token}`
+    console.log('App: Opening WebSocket...')
+    const socket = new WebSocket(wsUrl)
+    socketRef.current = socket
 
-      socket.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.type === 'row_update') {
-            setLastRowUpdate(msg.data)
-          }
-        } catch (e) {
-          console.error('App: WS message error:', e)
+    socket.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        if (msg.type === 'row_update') {
+          // Append to immutable ref-based queue - never overwrites, never loses messages
+          messageQueueRef.current.push(msg.data)
+          setMessageSeq(n => n + 1) // nudge ParameterGrid to process new messages
         }
-      }
-
-      socket.onclose = () => {
-        console.log('App: WS Closed, reconnecting...')
-        socketRef.current = null
-        reconnectTimeoutRef.current = setTimeout(connect, 3000)
-      }
-
-      socket.onerror = (e) => {
-        console.error('App: WS Error:', e)
+      } catch (e) {
+        console.error('App: WS message error:', e)
       }
     }
 
-    connect()
+    socket.onclose = () => {
+      console.log('App: WS Closed')
+      socketRef.current = null
+    }
+
+    socket.onerror = (e) => {
+      console.error('App: WS Error:', e)
+    }
+
     return () => {
       if (socketRef.current) {
         socketRef.current.close()
         socketRef.current = null
       }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current)
-        reconnectTimeoutRef.current = null
-      }
     }
-  }, [apiConfig, connectionStatus])
-
-  useEffect(() => {
-    if (!apiConfig) return
-    console.log('API Config loaded, starting health checks on port:', apiConfig.port)
-
-    const checkHealth = async () => {
-      try {
-        const res = await fetch(`http://127.0.0.1:${apiConfig.port}/health`, {
-          headers: { Authorization: `Bearer ${apiConfig.token}` }
-        })
-        if (res.ok) {
-          if (connectionStatus !== 'connected') setConnectionStatus('connected')
-        } else {
-          if (connectionStatus !== 'disconnected') setConnectionStatus('disconnected')
-        }
-      } catch (e) {
-        if (connectionStatus !== 'disconnected') setConnectionStatus('disconnected')
-      }
-    }
-
-    checkHealth()
-    const interval = setInterval(checkHealth, 3000)
-    return () => clearInterval(interval)
-  }, [apiConfig, connectionStatus])
+  }, [connectionStatus, apiConfig])
 
   if (!currentProject) {
     return (
@@ -139,7 +128,7 @@ export default function App() {
         setConnectionStatus('disconnected')
       }}
     >
-      {activeTab === 'parameters' && <ParameterGrid projectPath={currentProject.path} env={currentProject.env} lastRowUpdate={lastRowUpdate} />}
+      {activeTab === 'parameters' && <ParameterGrid projectPath={currentProject.path} env={currentProject.env} messageQueueRef={messageQueueRef} messageSeq={messageSeq} />}
       {activeTab === 'visualization' && <ConnectionViz projectPath={currentProject.path} env={currentProject.env} />}
       {activeTab === 'hooks' && <HookEditor projectPath={currentProject.path} env={currentProject.env} connectionStatus={connectionStatus} />}
       {activeTab === 'terminal' && <div className="content"><div style={{ color: 'var(--text3)' }}>Terminal panel placeholder</div></div>}

@@ -76,6 +76,19 @@ export function ProjectManager({ onProjectSelect }: ProjectManagerProps) {
                       <div className="item-path">{proj.path}</div>
                       <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>{proj.env}</div>
                     </div>
+                    <button
+                      title="Remove from recent"
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        const updated = await window.ipcRenderer.removeRecentProject(proj.path)
+                        setRecentProjects(updated)
+                      }}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--text3)', cursor: 'pointer', padding: '4px', borderRadius: 4, display: 'flex', opacity: 0.6 }}
+                      onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                      onMouseLeave={e => (e.currentTarget.style.opacity = '0.6')}
+                    >
+                      ✕
+                    </button>
                     <ChevronRight size={16} className="chevron" />
                   </div>
                 ))
