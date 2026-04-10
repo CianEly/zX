@@ -44,14 +44,12 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
 
   const handleConnect = async () => {
     setIsConnecting(true)
-    setSteps({
-      1: { status: 'active', sub: 'connecting...' }
-    })
+    setSteps({}) // Reset steps to clear previous attempts
     try {
       if (env === 'local') {
         const res = await window.ipcRenderer.spawnLocalBackend()
-        if (res.success) {
-          setSteps({ 1: { status: 'done', sub: 'local process running' }, 5: { status: 'done', sub: 'token auth ok' } })
+        if (!res.success) {
+          console.error('Local backend failed:', res.error)
         }
       } else {
         const res = await window.ipcRenderer.connectSsh({

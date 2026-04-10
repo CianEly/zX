@@ -46,13 +46,21 @@ export function parseCsv(csv: string): CsvData {
 }
 
 export function stringifyCsv(data: CsvData): string {
-  const { headers, rows } = data
+  const { headers: initialHeaders, rows } = data
+  
+  // Discover any new headers that might have been added dynamically (e.g. by extract hooks)
+  const allKeys = new Set<string>(initialHeaders)
+  rows.forEach(row => {
+    Object.keys(row).forEach(key => allKeys.add(key))
+  })
+  const headers = Array.from(allKeys)
+
   const headerLine = headers.join(',')
   const rowLines = rows.map(row => {
     return headers.map(header => {
-      const value = row[header] || ''
+      const value = String(row[header] || '')
       // Basic quote handling if value contains comma or quote
-      if (value.includes(',') || value.includes('"')) {
+      if (value.includes(',') || value.includes('"') || value.includes('\n')) {
         return `"${value.replace(/"/g, '""')}"`
       }
       return value

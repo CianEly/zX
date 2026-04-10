@@ -28,6 +28,7 @@ try {
     disconnect: () => ipcRenderer.invoke('disconnect'),
     connectSsh: (params: { host: string; tunnelPort: number; user?: string; password?: string; identityFile?: string }) => ipcRenderer.invoke('connect-ssh', params),
     spawnLocalBackend: () => ipcRenderer.invoke('spawn-local-backend'),
+    resolvePath: (path: string) => ipcRenderer.invoke('resolve-path', path),
     onConnectionProgress: (callback: (data: any) => void) => {
       const listener = (_event: any, data: any) => callback(data)
       ipcRenderer.on('connection-progress', listener)

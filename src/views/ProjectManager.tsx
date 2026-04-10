@@ -25,10 +25,15 @@ export function ProjectManager({ onProjectSelect }: ProjectManagerProps) {
           alert('Error creating project: ' + res.error)
           return
         }
+        // Use the normalized path returned from the backend
+        const finalPath = res.path || newProjectPath
+        await window.ipcRenderer.addRecentProject({ path: finalPath, env })
+        onProjectSelect(finalPath, env)
+      } else {
+        // For remote, we just register it and scaffold later once connected
+        await window.ipcRenderer.addRecentProject({ path: newProjectPath, env })
+        onProjectSelect(newProjectPath, env)
       }
-      // For remote, we just register it and scaffold later once connected
-      await window.ipcRenderer.addRecentProject({ path: newProjectPath, env })
-      onProjectSelect(newProjectPath, env)
     } catch (e: any) {
       alert('Failed to initialize: ' + e.message)
     } finally {
@@ -62,7 +67,10 @@ export function ProjectManager({ onProjectSelect }: ProjectManagerProps) {
             <div className="recent-list">
               {recentProjects.length > 0 ? (
                 recentProjects.map((proj) => (
-                  <div key={proj.path} className="recent-item" onClick={() => onProjectSelect(proj.path, proj.env)}>
+                  <div key={proj.path} className="recent-item" onClick={async () => {
+                    const finalPath = proj.env === 'local' ? await window.ipcRenderer.resolvePath(proj.path) : proj.path
+                    onProjectSelect(finalPath, proj.env)
+                  }}>
                     <Folder size={20} className="folder-icon" />
                     <div className="item-details">
                       <div className="item-path">{proj.path}</div>

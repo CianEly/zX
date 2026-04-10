@@ -1,5 +1,5 @@
 import { BrowserWindow, app, dialog, ipcMain } from "electron";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -597,6 +597,11 @@ function stringify(config) {
 var currentTunnelPort = null;
 var _dirname = dirname(fileURLToPath(import.meta.url));
 var username = userInfo().username;
+function resolvePath(p) {
+	if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+	return resolve(p);
+}
+ipcMain.handle("resolve-path", (event, p) => resolvePath(p));
 async function getSSHConfigForHost(hostAlias) {
 	const configPath = join(homedir(), ".ssh", "config");
 	try {
@@ -648,10 +653,15 @@ ipcMain.handle("disconnect", async () => {
 ipcMain.handle("spawn-local-backend", async (event) => {
 	try {
 		currentTunnelPort = null;
-		spawnBackend();
+		event.sender.send("connection-progress", {
+			step: 1,
+			status: "active",
+			sub: "starting local backend..."
+		});
+		if (!backendProcess) spawnBackend();
 		let attempts = 0;
 		let success = false;
-		while (attempts < 10) {
+		while (attempts < 15) {
 			try {
 				if ((await fetch(`http://127.0.0.1:${API_PORT}/health`, { headers: { Authorization: `Bearer ${API_TOKEN}` } })).ok) {
 					success = true;
@@ -661,10 +671,27 @@ ipcMain.handle("spawn-local-backend", async (event) => {
 			attempts++;
 			await new Promise((res) => setTimeout(res, 500));
 		}
-		if (!success) return {
-			success: false,
-			error: "Backend failed to start or health check timed out"
-		};
+		if (!success) {
+			event.sender.send("connection-progress", {
+				step: 0,
+				status: "error",
+				sub: "Backend failed to start or health check timed out"
+			});
+			return {
+				success: false,
+				error: "Backend failed to start or health check timed out"
+			};
+		}
+		event.sender.send("connection-progress", {
+			step: 1,
+			status: "done",
+			sub: "local process running"
+		});
+		event.sender.send("connection-progress", {
+			step: 5,
+			status: "done",
+			sub: "token auth ok"
+		});
 		return { success: true };
 	} catch (e) {
 		return {
@@ -709,7 +736,8 @@ ipcMain.handle("get-recent-projects", async () => {
 		return [];
 	}
 });
-ipcMain.handle("add-recent-project", async (event, { path, env }) => {
+ipcMain.handle("add-recent-project", async (event, { path: rawPath, env }) => {
+	const path = env === "local" ? resolvePath(rawPath) : rawPath;
 	const settingsPath = join(app.getPath("userData"), "recent-projects.json");
 	let projects = [];
 	try {
@@ -727,10 +755,10 @@ ipcMain.handle("add-recent-project", async (event, { path, env }) => {
 	await writeFile(settingsPath, JSON.stringify(projects));
 	return projects;
 });
-ipcMain.handle("init-project", async (event, { path: projectPath, env }) => {
+ipcMain.handle("init-project", async (event, { path: rawPath, env }) => {
 	try {
 		if (env === "local") {
-			const expandedPath = projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath;
+			const expandedPath = resolvePath(rawPath);
 			await mkdir(expandedPath, { recursive: true });
 			await mkdir(join(expandedPath, "hooks"), { recursive: true });
 			await mkdir(join(expandedPath, "data"), { recursive: true });
@@ -739,14 +767,17 @@ ipcMain.handle("init-project", async (event, { path: projectPath, env }) => {
 			} catch {
 				await writeFile(join(expandedPath, "hooks", filename), content);
 			}
-			return { success: true };
+			return {
+				success: true,
+				path: expandedPath
+			};
 		} else {
 			if (!sshClient) throw new Error("No active SSH connection");
-			await executeRemote(sshClient, `mkdir -p ${projectPath}/hooks ${projectPath}/data`);
+			await executeRemote(sshClient, `mkdir -p ${rawPath}/hooks ${rawPath}/data`);
 			const tempPath = join(app.getPath("userData"), "temp_hooks");
 			await mkdir(tempPath, { recursive: true });
 			for (const [filename, content] of Object.entries(hookTemplates)) {
-				const remoteFile = `${projectPath}/hooks/${filename}`;
+				const remoteFile = `${rawPath}/hooks/${filename}`;
 				if (!await new Promise((resolve) => {
 					sshClient.exec(`[ -f ${remoteFile} ] && echo "exists"`, (err, stream) => {
 						if (err) return resolve(false);
@@ -761,7 +792,10 @@ ipcMain.handle("init-project", async (event, { path: projectPath, env }) => {
 					await uploadFile(sshClient, localT, remoteFile).catch(() => null);
 				}
 			}
-			return { success: true };
+			return {
+				success: true,
+				path: rawPath
+			};
 		}
 	} catch (e) {
 		return {
@@ -772,7 +806,7 @@ ipcMain.handle("init-project", async (event, { path: projectPath, env }) => {
 });
 ipcMain.handle("list-hooks", async (event, { projectPath, env }) => {
 	try {
-		if (env === "local") return (await readdir(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "hooks"))).filter((f) => f.endsWith(".py"));
+		if (env === "local") return (await readdir(join(resolvePath(projectPath), "hooks"))).filter((f) => f.endsWith(".py"));
 		else {
 			if (!sshClient) return [];
 			return new Promise((resolve) => {
@@ -792,7 +826,7 @@ ipcMain.handle("list-hooks", async (event, { projectPath, env }) => {
 });
 ipcMain.handle("read-hook", async (event, { projectPath, filename, env }) => {
 	try {
-		if (env === "local") return await readFile(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "hooks", filename), "utf8");
+		if (env === "local") return await readFile(join(resolvePath(projectPath), "hooks", filename), "utf8");
 		else {
 			if (!sshClient) throw new Error("No SSH connection");
 			return new Promise((resolve, reject) => {
@@ -811,7 +845,7 @@ ipcMain.handle("read-hook", async (event, { projectPath, filename, env }) => {
 ipcMain.handle("write-hook", async (event, { projectPath, filename, content, env }) => {
 	try {
 		if (env === "local") {
-			await writeFile(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "hooks", filename), content);
+			await writeFile(join(resolvePath(projectPath), "hooks", filename), content);
 			return { success: true };
 		} else {
 			if (!sshClient) throw new Error("No SSH connection");
@@ -835,7 +869,7 @@ ipcMain.handle("write-hook", async (event, { projectPath, filename, content, env
 });
 ipcMain.handle("list-data", async (event, { projectPath, env }) => {
 	try {
-		if (env === "local") return (await readdir(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "data"))).filter((f) => f.endsWith(".csv"));
+		if (env === "local") return (await readdir(join(resolvePath(projectPath), "data"))).filter((f) => f.endsWith(".csv"));
 		else {
 			if (!sshClient) return [];
 			return new Promise((resolve) => {
@@ -855,7 +889,7 @@ ipcMain.handle("list-data", async (event, { projectPath, env }) => {
 });
 ipcMain.handle("read-data", async (event, { projectPath, filename, env }) => {
 	try {
-		if (env === "local") return await readFile(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "data", filename), "utf8");
+		if (env === "local") return await readFile(join(resolvePath(projectPath), "data", filename), "utf8");
 		else {
 			if (!sshClient) throw new Error("No SSH connection");
 			return new Promise((resolve, reject) => {
@@ -874,7 +908,7 @@ ipcMain.handle("read-data", async (event, { projectPath, filename, env }) => {
 ipcMain.handle("write-data", async (event, { projectPath, filename, content, env }) => {
 	try {
 		if (env === "local") {
-			await writeFile(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "data", filename), content);
+			await writeFile(join(resolvePath(projectPath), "data", filename), content);
 			return { success: true };
 		} else {
 			if (!sshClient) throw new Error("No SSH connection");
@@ -913,7 +947,7 @@ ipcMain.handle("import-data", async (event, { projectPath, env }) => {
 		const filename = sourcePath.split(/[\\/]/).pop();
 		console.log(`[import-data] Importing: ${filename} from ${sourcePath}`);
 		const content = await readFile(sourcePath, "utf8");
-		if (env === "local") await writeFile(join(projectPath.startsWith("~/") ? join(homedir(), projectPath.slice(2)) : projectPath, "data", filename), content);
+		if (env === "local") await writeFile(join(resolvePath(projectPath), "data", filename), content);
 		else {
 			if (!sshClient) throw new Error("No SSH connection");
 			const tempT = join(app.getPath("userData"), `temp_${filename}`);

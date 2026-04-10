@@ -7,9 +7,10 @@ import type { CsvData } from '../utils/csv'
 interface ParameterGridProps {
   projectPath: string;
   env: 'local' | 'remote';
+  lastRowUpdate?: any;
 }
 
-export function ParameterGrid({ projectPath, env }: ParameterGridProps) {
+export function ParameterGrid({ projectPath, env, lastRowUpdate }: ParameterGridProps) {
   const [dataFiles, setDataFiles] = useState<string[]>([])
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [csvData, setCsvData] = useState<CsvData | null>(null)
@@ -18,12 +19,18 @@ export function ParameterGrid({ projectPath, env }: ParameterGridProps) {
   const [isSaving, setIsSaving] = useState(false)
   const [filterText, setFilterText] = useState('')
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
+  
+  // Execution State
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<number>>(new Set())
+  const [isExecuting, setIsExecuting] = useState(false)
+  const [dryRun, setDryRun] = useState(false)
+  const [forceReRun, setForceReRun] = useState(false)
 
   // Helper to render icons safely
-  const Icon = ({ name, size = 16, className = "" }: { name: string, size?: number, className?: string }) => {
+  const Icon = ({ name, size = 16, className = "", style = {} }: { name: string, size?: number, className?: string, style?: any }) => {
     const Component = (Icons as any)[name]
-    if (!Component) return <span style={{ fontSize: 10 }}>[{name}]</span>
-    return <Component size={size} className={className} />
+    if (!Component) return <span style={{ fontSize: 10, ...style }}>[{name}]</span>
+    return <Component size={size} className={className} style={style} />
   }
 
   // Fetch file list
@@ -62,6 +69,27 @@ export function ParameterGrid({ projectPath, env }: ParameterGridProps) {
     loadData()
   }, [selectedFile, projectPath, env])
 
+  // Handle real-time updates from global WebSocket in App.tsx
+  useEffect(() => {
+    if (!lastRowUpdate || !csvData) return
+    
+    setCsvData(prev => {
+      if (!prev || !prev.rows) return prev;
+      const newRows = [...prev.rows];
+      const idx = prev.rows.findIndex(r => parseInt(r._zx_row_id || '-1') === lastRowUpdate.row_id);
+      
+      if (idx !== -1) {
+        newRows[idx] = { 
+          ...newRows[idx], 
+          _zx_status: lastRowUpdate.status, 
+          _zx_hook_stage: lastRowUpdate.stage,
+          _zx_error: lastRowUpdate.error 
+        };
+      }
+      return { ...prev, rows: newRows };
+    });
+  }, [lastRowUpdate]);
+
   const handleSave = async () => {
     if (!selectedFile || !csvData) return
     setIsSaving(true)
@@ -77,6 +105,66 @@ export function ParameterGrid({ projectPath, env }: ParameterGridProps) {
       alert('Error saving data: ' + err)
     }
     setIsSaving(false)
+  }
+
+  const handleExecute = async () => {
+    if (selectedRowIds.size === 0 || !selectedFile) return
+    setIsExecuting(true)
+    try {
+      const config = await window.ipcRenderer.getApiConfig()
+      const rowIds = Array.from(selectedRowIds)
+      
+      const res = await fetch(`http://127.0.0.1:${config.port}/execute`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.token}`
+        },
+        body: JSON.stringify({
+          project_path: projectPath,
+          db_filename: selectedFile,
+          row_ids: rowIds,
+          dry_run: dryRun
+        })
+      })
+      
+      if (!res.ok) {
+        const err = await res.json()
+        alert('Execution failed to start: ' + err.detail)
+      }
+    } catch (err) {
+      alert('Error starting execution: ' + err)
+    } finally {
+      setIsExecuting(false)
+    }
+  }
+
+  const handleStop = async () => {
+    try {
+      const config = await window.ipcRenderer.getApiConfig()
+      await fetch(`http://127.0.0.1:${config.port}/stop?project_path=${encodeURIComponent(projectPath)}&db_filename=${encodeURIComponent(selectedFile || 'zx_database.csv')}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${config.token}` }
+      })
+    } catch (err) {
+      console.error('Error stopping:', err)
+    }
+  }
+
+  const toggleRowSelection = (id: number) => {
+    const next = new Set(selectedRowIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setSelectedRowIds(next)
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedRowIds.size === filteredRows.length) {
+      setSelectedRowIds(new Set())
+    } else {
+      const allIds = filteredRows.map(r => parseInt(r._zx_row_id || '0'))
+      setSelectedRowIds(new Set(allIds))
+    }
   }
 
   const handleImport = async () => {
@@ -245,6 +333,38 @@ export function ParameterGrid({ projectPath, env }: ParameterGridProps) {
             </button>
           </div>
 
+          {/* Execution Toolbar */}
+          <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 16, background: '#0D0E12' }}>
+            <button 
+              onClick={handleExecute}
+              disabled={isExecuting || selectedRowIds.size === 0}
+              className="btn btn-accent"
+              style={{ padding: '6px 16px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}
+            >
+              <Icon name="Play" size={14} />
+              Run Exploration ({selectedRowIds.size})
+            </button>
+            <button 
+              onClick={handleStop}
+              className="btn btn-ghost"
+              style={{ padding: '6px 16px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, color: '#EF4444' }}
+            >
+              <Icon name="Square" size={14} />
+              Stop
+            </button>
+
+            <div style={{ height: 20, width: 1, background: 'var(--border)', margin: '0 8px' }} />
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} />
+              Dry Run
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={forceReRun} onChange={e => setForceReRun(e.target.checked)} />
+              Force Re-run
+            </label>
+          </div>
+
           <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
             {isLoading && (
               <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -264,27 +384,51 @@ export function ParameterGrid({ projectPath, env }: ParameterGridProps) {
               <table className="param-table">
                 <thead>
                   <tr>
+                    <th style={{ width: 40, textAlign: 'center' }}>
+                      <input type="checkbox" onChange={toggleSelectAll} checked={selectedRowIds.size === filteredRows.length && filteredRows.length > 0} />
+                    </th>
                     <th style={{ width: 40, textAlign: 'center' }}>#</th>
+                    <th style={{ width: 80 }}>Status</th>
                     {csvData.headers.map(h => (
                       <th key={h}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map((row, i) => (
-                    <tr key={i}>
-                      <td style={{ color: 'var(--text3)', fontSize: 11, textAlign: 'center', background: '#1A1B20' }}>{i + 1}</td>
-                      {csvData.headers.map(header => (
-                        <td key={header}>
+                  {filteredRows.map((row, i) => {
+                    const rid = parseInt(row._zx_row_id || String(i));
+                    const status = row._zx_status || 'pending';
+                    return (
+                      <tr key={rid} className={status}>
+                        <td style={{ textAlign: 'center' }}>
                           <input 
-                            className="cell-input"
-                            value={row[header] || ''}
-                            onChange={e => handleCellChange(i, header, e.target.value)}
+                            type="checkbox" 
+                            checked={selectedRowIds.has(rid)} 
+                            onChange={() => toggleRowSelection(rid)} 
                           />
                         </td>
-                      ))}
-                    </tr>
-                  ))}
+                        <td style={{ color: 'var(--text3)', fontSize: 11, textAlign: 'center', background: '#1A1B20' }}>{rid}</td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                            {status === 'running' && <Icon name="RotateCw" size={12} className="spin" />}
+                            {status === 'completed' && <Icon name="CheckCircle2" size={12} style={{ color: '#10B981' }} />}
+                            {status === 'failed' && <Icon name="AlertCircle" size={12} style={{ color: '#EF4444' }} />}
+                            {status === 'pending' && <Icon name="Circle" size={12} style={{ opacity: 0.3 }} />}
+                            <span style={{ textTransform: 'capitalize' }}>{row._zx_hook_stage || status}</span>
+                          </div>
+                        </td>
+                        {csvData.headers.map(header => (
+                          <td key={header}>
+                            <input 
+                              className="cell-input"
+                              value={row[header] || ''}
+                              onChange={e => handleCellChange(i, header, e.target.value)}
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             ) : csvData ? (

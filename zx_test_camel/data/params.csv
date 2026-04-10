@@ -1,0 +1,5 @@
+_zx_row_id,x,y,_zx_status,_zx_hook_stage,_zx_error,_zx_started_at,_zx_completed_at,_zx_run_dir,calculated_z
+0,-1.0,0.5,completed,,,2026-04-10T13:09:35.705040,2026-04-10T13:09:35.762647,/Users/cianely/zX/zx_test_camel/run_0,0.9833333333333334
+1,0.0,0.0,completed,,,2026-04-10T13:09:35.764226,2026-04-10T13:09:35.809258,/Users/cianely/zX/zx_test_camel/run_1,0.0
+2,0.08,0.71,completed,,,2026-04-10T13:09:35.810729,2026-04-10T13:09:35.855925,/Users/cianely/zX/zx_test_camel/run_2,-0.9176186886186668
+3,1.5,-0.5,completed,,,2026-04-10T13:09:35.857841,2026-04-10T13:09:35.901372,/Users/cianely/zX/zx_test_camel/run_3,0.6656249999999986

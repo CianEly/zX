@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Layout } from './components/Layout'
 import { ParameterGrid } from './views/ParameterGrid'
 import { ConnectionViz } from './views/ConnectionViz'
@@ -11,6 +11,10 @@ export default function App() {
   const [apiConfig, setApiConfig] = useState<{ port: string; token: string } | null>(null)
   const [currentProject, setCurrentProject] = useState<{ path: string; env: 'local' | 'remote' } | null>(null)
 
+
+  const [lastRowUpdate, setLastRowUpdate] = useState<any>(null)
+  const socketRef = useRef<WebSocket | null>(null)
+  const reconnectTimeoutRef = useRef<any>(null)
 
   useEffect(() => {
     const fetchConfig = async () => {
@@ -31,6 +35,61 @@ export default function App() {
     const interval = setInterval(fetchConfig, 3000)
     return () => clearInterval(interval)
   }, [])
+
+  // Persistent WebSocket for row updates
+  useEffect(() => {
+    if (!apiConfig || connectionStatus !== 'connected') {
+      if (socketRef.current) {
+        socketRef.current.close()
+        socketRef.current = null
+      }
+      return
+    }
+
+    const connect = () => {
+      if (socketRef.current && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
+        return
+      }
+
+      const wsUrl = `ws://127.0.0.1:${apiConfig.port}/ws?token=${apiConfig.token}`
+      console.log('App: Connecting WebSocket...')
+      const socket = new WebSocket(wsUrl)
+      socketRef.current = socket
+
+      socket.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg.type === 'row_update') {
+            setLastRowUpdate(msg.data)
+          }
+        } catch (e) {
+          console.error('App: WS message error:', e)
+        }
+      }
+
+      socket.onclose = () => {
+        console.log('App: WS Closed, reconnecting...')
+        socketRef.current = null
+        reconnectTimeoutRef.current = setTimeout(connect, 3000)
+      }
+
+      socket.onerror = (e) => {
+        console.error('App: WS Error:', e)
+      }
+    }
+
+    connect()
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.close()
+        socketRef.current = null
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
+      }
+    }
+  }, [apiConfig, connectionStatus])
 
   useEffect(() => {
     if (!apiConfig) return
@@ -59,7 +118,10 @@ export default function App() {
   if (!currentProject) {
     return (
       <ProjectManager 
-        onProjectSelect={(path, env) => setCurrentProject({ path, env })} 
+        onProjectSelect={async (path, env) => {
+          const finalPath = env === 'local' ? await window.ipcRenderer.resolvePath(path) : path
+          setCurrentProject({ path: finalPath, env })
+        }} 
       />
     )
   }
@@ -77,7 +139,7 @@ export default function App() {
         setConnectionStatus('disconnected')
       }}
     >
-      {activeTab === 'parameters' && <ParameterGrid projectPath={currentProject.path} env={currentProject.env} />}
+      {activeTab === 'parameters' && <ParameterGrid projectPath={currentProject.path} env={currentProject.env} lastRowUpdate={lastRowUpdate} />}
       {activeTab === 'visualization' && <ConnectionViz projectPath={currentProject.path} env={currentProject.env} />}
       {activeTab === 'hooks' && <HookEditor projectPath={currentProject.path} env={currentProject.env} connectionStatus={connectionStatus} />}
       {activeTab === 'terminal' && <div className="content"><div style={{ color: 'var(--text3)' }}>Terminal panel placeholder</div></div>}

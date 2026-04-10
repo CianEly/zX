@@ -1,9 +1,12 @@
 import os
-from fastapi import FastAPI, Depends, HTTPException, status
+import asyncio
+from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Optional
-
+from typing import List, Optional
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+
+from .runner import ExecutionRunner
 
 app = FastAPI(title="zX Backend")
 
@@ -14,17 +17,37 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-security = HTTPBearer()
 
-# Token should be passed from Electron on startup via environment variable
+security = HTTPBearer()
 EXPECTED_TOKEN = os.getenv("ZX_API_TOKEN")
+
+# Connection Manager for WebSockets
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except:
+                pass
+
+manager = ConnectionManager()
+
+# Runner state
+runners: dict[str, ExecutionRunner] = {}
 
 def verify_token(auth: HTTPAuthorizationCredentials = Depends(security)):
     if not EXPECTED_TOKEN:
-        # In development, if no token is set, we might allow it or log a warning
-        # For now, let's keep it strict or allow 'dev-token'
         return auth.credentials
-    
     if auth.credentials != EXPECTED_TOKEN:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -33,14 +56,64 @@ def verify_token(auth: HTTPAuthorizationCredentials = Depends(security)):
         )
     return auth.credentials
 
+class ExecuteRequest(BaseModel):
+    project_path: str
+    db_filename: Optional[str] = "zx_database.csv"
+    row_ids: List[int]
+    dry_run: bool = False
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "version": "0.1.0"}
 
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):
+    # Note: Simple token check via query param for WS
+    if EXPECTED_TOKEN and token != EXPECTED_TOKEN:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+        
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+@app.post("/execute", dependencies=[Depends(verify_token)])
+async def execute_exploration(req: ExecuteRequest):
+    key = f"{req.project_path}:{req.db_filename}"
+    if key not in runners:
+        # Define callback to broadcast updates
+        async def on_update(data):
+            await manager.broadcast({"type": "row_update", "data": data})
+        
+        runners[key] = ExecutionRunner(
+            req.project_path, 
+            db_filename=req.db_filename,
+            on_update=on_update
+        )
+    
+    runner = runners[key]
+    if runner.is_running:
+        raise HTTPException(status_code=400, detail="Runner is already active for this file")
+    
+    # Start background task
+    asyncio.create_task(runner.run_rows(req.row_ids, req.dry_run))
+    return {"status": "started", "row_count": len(req.row_ids)}
+
+@app.post("/stop", dependencies=[Depends(verify_token)])
+async def stop_exploration(project_path: str, db_filename: str = "zx_database.csv"):
+    key = f"{project_path}:{db_filename}"
+    if key in runners:
+        runners[key].stop()
+        return {"status": "stopping"}
+    return {"status": "not_running"}
+
 def main():
     import uvicorn
     port = int(os.getenv("ZX_PORT", 8000))
-    # Using 127.0.0.1 for local health-check and REST calls
     uvicorn.run(app, host="127.0.0.1", port=port)
 
 if __name__ == "__main__":
