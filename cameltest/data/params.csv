@@ -1,0 +1,5 @@
+x,y,_zx_status,_zx_hook_stage,_zx_error,_zx_started_at,_zx_completed_at,_zx_run_dir,calculated_z
+-1.0,0.5,completed,,,2026-05-08T14:43:26.159086,2026-05-08T14:43:26.212603,/Users/cianely/zX/cameltest/run_0,0.9833333333333334
+0.0,0.0,completed,,,2026-05-08T14:43:26.213801,2026-05-08T14:43:26.255811,/Users/cianely/zX/cameltest/run_1,0.0
+0.08,0.71,completed,,,2026-05-08T14:43:26.257185,2026-05-08T14:43:26.302480,/Users/cianely/zX/cameltest/run_2,-0.9176186886186668
+1.5,-0.5,completed,,,2026-05-08T14:43:26.303655,2026-05-08T14:43:26.342815,/Users/cianely/zX/cameltest/run_3,0.6656249999999986
