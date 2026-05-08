@@ -214,6 +214,12 @@ ipcMain.handle('remove-recent-project', async (event, path: string) => {
   try {
     const content = await readFile(settingsPath, 'utf8')
     let projects: { path: string, env: 'local' | 'remote' }[] = JSON.parse(content)
+    
+    // Basic migration if it was a flat array
+    if (Array.isArray(projects) && projects.length > 0 && typeof projects[0] === 'string') {
+      projects = (projects as any).map((p: string) => ({ path: p, env: 'local' }))
+    }
+
     projects = projects.filter(p => p.path !== path)
     await writeFile(settingsPath, JSON.stringify(projects))
     return projects

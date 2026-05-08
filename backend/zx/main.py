@@ -114,6 +114,44 @@ async def stop_exploration(project_path: str, db_filename: str = "zx_database.cs
         return {"status": "stopping"}
     return {"status": "not_running"}
 
+@app.get("/plot", dependencies=[Depends(verify_token)])
+async def get_plots(project_path: str, db_filename: str = "zx_database.csv"):
+    key = f"{project_path}:{db_filename}"
+    if key not in runners:
+        # Auto-initialize runner if it doesn't exist yet for this path
+        async def on_update(data):
+            await manager.broadcast({"type": "row_update", "data": data})
+        runners[key] = ExecutionRunner(project_path, db_filename=db_filename, on_update=on_update)
+    
+    runner = runners[key]
+    plot_hook = runner.hook_manager.get_plot()
+    if not plot_hook:
+        return {"figures": {}}
+    
+    try:
+        import pandas as pd
+        df = pd.read_csv(runner.db_path)
+        figures = await asyncio.to_thread(plot_hook, df, runner.state)
+        
+        # Ensure result is a dict of figures
+        if not isinstance(figures, dict):
+            figures = {"Default Plot": figures}
+            
+        # Manually clean figures to avoid FastAPI recursion error with Plotly objects
+        def to_json_ready(obj):
+            if hasattr(obj, "to_plotly_json"):
+                return to_json_ready(obj.to_plotly_json())
+            if isinstance(obj, list):
+                return [to_json_ready(x) for x in obj]
+            if isinstance(obj, dict):
+                return {k: to_json_ready(v) for k, v in obj.items()}
+            return obj
+
+        return {"figures": to_json_ready(figures)}
+    except Exception as e:
+        print(f"Error in plot hook: {e}")
+        raise HTTPException(status_code=500, detail=f"Plot hook error: {str(e)}")
+
 def main():
     import uvicorn
     port = int(os.getenv("ZX_PORT", 8000))

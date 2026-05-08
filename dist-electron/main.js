@@ -767,6 +767,10 @@ ipcMain.handle("remove-recent-project", async (event, path) => {
 	try {
 		const content = await readFile(settingsPath, "utf8");
 		let projects = JSON.parse(content);
+		if (Array.isArray(projects) && projects.length > 0 && typeof projects[0] === "string") projects = projects.map((p) => ({
+			path: p,
+			env: "local"
+		}));
 		projects = projects.filter((p) => p.path !== path);
 		await writeFile(settingsPath, JSON.stringify(projects));
 		return projects;

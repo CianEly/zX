@@ -34,6 +34,13 @@ export function Sidebar({ activeTab, setActiveTab, connectionStatus, port, proje
           )}
         </div>
         <div 
+          className={`nav-item ${activeTab === 'connection' ? 'active' : ''}`}
+          onClick={() => setActiveTab('connection')}
+        >
+          <ArrowLeftRight className="nav-icon" size={16} />
+          Connection
+        </div>
+        <div 
           className={`nav-item ${activeTab === 'parameters' ? 'active' : ''}`}
           onClick={() => setActiveTab('parameters')}
         >

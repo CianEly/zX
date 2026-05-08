@@ -25,7 +25,11 @@ class HookManager:
             # Add hooks dir to path so imports within hooks work
             sys.path.insert(0, str(self.hooks_dir))
             try:
+                # Explicitly remove from sys.modules to force a clean reload
+                if module_name in sys.modules:
+                    del sys.modules[module_name]
                 spec.loader.exec_module(module)
+                sys.modules[module_name] = module
             finally:
                 sys.path.pop(0)
 
@@ -49,3 +53,6 @@ class HookManager:
 
     def get_explore(self) -> Optional[Callable]:
         return self._load_hook_func("explore.py", "explore")
+
+    def get_plot(self) -> Optional[Callable]:
+        return self._load_hook_func("plot.py", "plot")

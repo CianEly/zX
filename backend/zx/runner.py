@@ -69,12 +69,17 @@ class ExecutionRunner:
 
         # Update specific row
         # row_id should correspond to _zx_row_id column if present, or index
+        mask = None
         if "_zx_row_id" in df.columns:
-            mask = df["_zx_row_id"] == row_id
+            # Ensure numeric comparison
+            row_id_col = pd.to_numeric(df["_zx_row_id"], errors='coerce')
+            mask = row_id_col == row_id
+        
+        if mask is not None and mask.any():
             for k, v in updates.items():
                 df.loc[mask, k] = v
-        else:
-            # Fallback to index if _zx_row_id is not yet initialized
+        elif row_id < len(df):
+            # Fallback to index
             for k, v in updates.items():
                 df.at[row_id, k] = v
         
@@ -101,6 +106,54 @@ class ExecutionRunner:
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
 
+    def _append_rows(self, new_rows: List[Dict[str, Any]], iteration: int) -> List[int]:
+        df = pd.read_csv(self.db_path)
+        
+        # Ensure _zx_ columns exist
+        zx_cols = ["_zx_row_id", "_zx_status", "_zx_hook_stage", "_zx_error", "_zx_started_at", "_zx_completed_at", "_zx_run_dir", "_zx_iteration"]
+        for col in zx_cols:
+            if col not in df.columns:
+                if col == "_zx_row_id":
+                    df[col] = range(len(df))
+                else:
+                    df[col] = ""
+
+        # Determine next row_id
+        # We use pd.to_numeric to handle mixed types or NaNs in the ID column
+        row_id_col = pd.to_numeric(df["_zx_row_id"], errors='coerce')
+        if not df.empty:
+            max_id = row_id_col.max()
+            if pd.isna(max_id):
+                # If column exists but is all empty/NaN, populate it now
+                df["_zx_row_id"] = range(len(df))
+                next_id = len(df)
+            else:
+                next_id = int(max_id + 1)
+        else:
+            next_id = 0
+            
+        added_ids = []
+        new_df_rows = []
+        for i, row in enumerate(new_rows):
+            rid = next_id + i
+            row_to_add = row.copy()
+            row_to_add["_zx_row_id"] = rid
+            row_to_add["_zx_status"] = "pending"
+            row_to_add["_zx_iteration"] = iteration
+            # Fill other zx columns with defaults
+            for col in zx_cols:
+                if col not in row_to_add:
+                    row_to_add[col] = ""
+            
+            new_df_rows.append(row_to_add)
+            added_ids.append(rid)
+            
+        if new_df_rows:
+            df = pd.concat([df, pd.DataFrame(new_df_rows)], ignore_index=True)
+            df.to_csv(self.db_path, index=False)
+            
+        return added_ids
+
     async def run_rows(self, row_ids: List[int], dry_run: bool = False):
         if self.is_running:
             return
@@ -111,22 +164,64 @@ class ExecutionRunner:
         try:
             # 1. Initialize (Optional)
             init_hook = self.hook_manager.get_initialize()
+            current_row_ids = row_ids
+            
             if init_hook and not dry_run:
                 print(f"Running initialization hook...")
-                # We might need to pass the whole table here if the spec says so
                 df = pd.read_csv(self.db_path)
-                # tuple[list[dict], dict]
-                new_rows, new_state = init_hook(df, self.state)
-                self.state.update(new_state)
-                # Note: If init generates rows, we'd need to append them to the CSV here.
-                # For now, following the simple loop.
+                result = await asyncio.to_thread(init_hook, df, self.state)
+                
+                # Result can be (new_rows, new_state) or just new_rows
+                if isinstance(result, tuple):
+                    new_rows, new_state = result
+                    self.state.update(new_state)
+                else:
+                    new_rows = result
+                
+                if new_rows:
+                    # If we started with an empty set or want to ADD rows from init
+                    added = self._append_rows(new_rows, 0)
+                    if not current_row_ids:
+                        current_row_ids = added
 
-            for rid in row_ids:
-                if self.should_stop:
-                    print("Execution stopped by user.")
+            current_iteration = self.state.get("_zx_iteration", 0)
+
+            while current_row_ids:
+                if self.should_stop: break
+
+                # Execute current batch
+                for rid in current_row_ids:
+                    if self.should_stop: break
+                    await self._execute_row(rid, dry_run)
+
+                if self.should_stop: break
+
+                # 2. Check for Exploration Hook
+                explore_hook = self.hook_manager.get_explore()
+                if not explore_hook or dry_run:
                     break
 
-                await self._execute_row(rid, dry_run)
+                print(f"--- Iteration {current_iteration} complete. Running exploration... ---")
+                df = pd.read_csv(self.db_path)
+                new_rows = await asyncio.to_thread(explore_hook, df, self.state)
+
+                if not new_rows:
+                    print("Exploration finished: no more rows generated.")
+                    break
+
+                # Check max iterations
+                max_iter = self.state.get("max_iterations", 100)
+                if current_iteration >= max_iter:
+                    print(f"Exploration halted: reached max_iterations ({max_iter})")
+                    break
+
+                # 3. Append new rows and cascade
+                current_iteration += 1
+                self.state["_zx_iteration"] = current_iteration
+                current_row_ids = self._append_rows(new_rows, current_iteration)
+                
+                # Send a signal to the UI that the table has grown
+                await self._emit_update(-1, "exploration_new_rows", extra_data={"new_ids": current_row_ids, "iteration": current_iteration})
 
         finally:
             self.is_running = False
@@ -145,10 +240,19 @@ class ExecutionRunner:
         self._update_csv(row_id, start_updates)
 
         df = pd.read_csv(self.db_path)
+        mask = None
         if "_zx_row_id" in df.columns:
-            row_dict = df[df["_zx_row_id"] == row_id].iloc[0].to_dict()
-        else:
+            # Force numeric comparison to avoid type mismatch (int vs float vs string)
+            row_id_col = pd.to_numeric(df["_zx_row_id"], errors='coerce')
+            mask = row_id_col == row_id
+            
+        if mask is not None and mask.any():
+            row_dict = df[mask].iloc[0].to_dict()
+        elif row_id < len(df):
+            # Fallback to index
             row_dict = df.iloc[row_id].to_dict()
+        else:
+            raise ValueError(f"Row identifier {row_id} not found as ID or Index")
 
         stages = [
             ("preprocessing", self.hook_manager.get_preprocess()),

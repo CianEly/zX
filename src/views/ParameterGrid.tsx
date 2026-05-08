@@ -9,11 +9,12 @@ interface ParameterGridProps {
   env: 'local' | 'remote';
   messageQueueRef?: { current: any[] };
   messageSeq?: number;
+  selectedFile: string | null;
+  setSelectedFile: (file: string | null) => void;
 }
 
-export function ParameterGrid({ projectPath, env, messageQueueRef, messageSeq }: ParameterGridProps) {
+export function ParameterGrid({ projectPath, env, messageQueueRef, messageSeq, selectedFile, setSelectedFile }: ParameterGridProps) {
   const [dataFiles, setDataFiles] = useState<string[]>([])
-  const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [csvData, setCsvData] = useState<CsvData | null>(null)
   const [isDirty, setIsDirty] = useState(false)
   const [isLoading, setIsLoading] = useState(false)

@@ -15,7 +15,8 @@ dependencies = [
     "python-multipart",
     "asyncssh",
     "pydantic",
-    "cryptography"
+    "cryptography",
+    "plotly"
 ]
 
 [project.scripts]

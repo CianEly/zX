@@ -1,15 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
+import { RefreshCw } from 'lucide-react'
 import { Layout } from './components/Layout'
 import { ParameterGrid } from './views/ParameterGrid'
 import { ConnectionViz } from './views/ConnectionViz'
 import { HookEditor } from './views/HookEditor'
 import { ProjectManager } from './views/ProjectManager'
+import React, { Suspense, lazy } from 'react'
+
+const PlotView = lazy(() => import('./views/PlotView').then(m => ({ default: m.PlotView })))
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('parameters')
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected')
   const [apiConfig, setApiConfig] = useState<{ port: string; token: string } | null>(null)
   const [currentProject, setCurrentProject] = useState<{ path: string; env: 'local' | 'remote' } | null>(null)
+  const [selectedFile, setSelectedFile] = useState<string | null>(null)
 
 
   const messageQueueRef = useRef<any[]>([])
@@ -128,8 +133,13 @@ export default function App() {
         setConnectionStatus('disconnected')
       }}
     >
-      {activeTab === 'parameters' && <ParameterGrid projectPath={currentProject.path} env={currentProject.env} messageQueueRef={messageQueueRef} messageSeq={messageSeq} />}
-      {activeTab === 'visualization' && <ConnectionViz projectPath={currentProject.path} env={currentProject.env} />}
+      {activeTab === 'connection' && <ConnectionViz projectPath={currentProject.path} env={currentProject.env} />}
+      {activeTab === 'parameters' && <ParameterGrid projectPath={currentProject.path} env={currentProject.env} messageQueueRef={messageQueueRef} messageSeq={messageSeq} selectedFile={selectedFile} setSelectedFile={setSelectedFile} />}
+      {activeTab === 'visualization' && (
+        <Suspense fallback={<div className="content"><div className="spin" style={{ margin: 'auto' }}><RefreshCw /></div></div>}>
+          <PlotView projectPath={currentProject.path} env={currentProject.env} dbFilename={selectedFile || undefined} />
+        </Suspense>
+      )}
       {activeTab === 'hooks' && <HookEditor projectPath={currentProject.path} env={currentProject.env} connectionStatus={connectionStatus} />}
       {activeTab === 'terminal' && <div className="content"><div style={{ color: 'var(--text3)' }}>Terminal panel placeholder</div></div>}
       {activeTab === 'files' && <div className="content"><div style={{ color: 'var(--text3)' }}>Files panel placeholder</div></div>}
