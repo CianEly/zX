@@ -20,6 +20,10 @@ export default function App() {
   const messageQueueRef = useRef<any[]>([])
   const [messageSeq, setMessageSeq] = useState(0)
   const socketRef = useRef<WebSocket | null>(null)
+  
+  // Centralized CSV Data State
+  const [csvData, setCsvData] = useState<any | null>(null)
+  const processedUntilRef = useRef(0)
 
   // 1. Fetch config and check health (Stable Polling)
   useEffect(() => {
@@ -83,9 +87,8 @@ export default function App() {
       try {
         const msg = JSON.parse(event.data)
         if (msg.type === 'row_update') {
-          // Append to immutable ref-based queue - never overwrites, never loses messages
           messageQueueRef.current.push(msg.data)
-          setMessageSeq(n => n + 1) // nudge ParameterGrid to process new messages
+          setMessageSeq(n => n + 1)
         }
       } catch (e) {
         console.error('App: WS message error:', e)
@@ -108,6 +111,45 @@ export default function App() {
       }
     }
   }, [connectionStatus, apiConfig])
+
+  // 3. Centralized processing of WebSocket updates into csvData
+  useEffect(() => {
+    if (!csvData) return
+
+    const queue = messageQueueRef.current
+    const unprocessed = queue.slice(processedUntilRef.current)
+    if (unprocessed.length === 0) return
+
+    setCsvData((prev: any) => {
+      if (!prev || !prev.rows) return prev;
+      const newRows = [...prev.rows];
+      let newHeaders = [...prev.headers];
+
+      for (const update of unprocessed) {
+        const idx = newRows.findIndex(r => parseInt(r._zx_row_id || '-1') === update.row_id);
+        if (idx !== -1) {
+          const merged = {
+            ...newRows[idx],
+            _zx_status: update.status,
+            _zx_hook_stage: update.stage,
+            _zx_error: update.error,
+            ...(update.extra_data || {})
+          };
+          newRows[idx] = merged;
+
+          // Add new columns dynamically
+          for (const key of Object.keys(update.extra_data || {})) {
+            if (!newHeaders.includes(key) && !key.startsWith('_zx_')) {
+              newHeaders = [...newHeaders, key];
+            }
+          }
+        }
+      }
+      return { ...prev, headers: newHeaders, rows: newRows };
+    });
+
+    processedUntilRef.current = queue.length;
+  }, [messageSeq, csvData]);
 
   if (!currentProject) {
     return (
@@ -134,10 +176,19 @@ export default function App() {
       }}
     >
       {activeTab === 'connection' && <ConnectionViz projectPath={currentProject.path} env={currentProject.env} />}
-      {activeTab === 'parameters' && <ParameterGrid projectPath={currentProject.path} env={currentProject.env} messageQueueRef={messageQueueRef} messageSeq={messageSeq} selectedFile={selectedFile} setSelectedFile={setSelectedFile} />}
+      {activeTab === 'parameters' && (
+        <ParameterGrid 
+          projectPath={currentProject.path} 
+          env={currentProject.env} 
+          csvData={csvData}
+          setCsvData={setCsvData}
+          selectedFile={selectedFile} 
+          setSelectedFile={setSelectedFile} 
+        />
+      )}
       {activeTab === 'visualization' && (
         <Suspense fallback={<div className="content"><div className="spin" style={{ margin: 'auto' }}><RefreshCw /></div></div>}>
-          <PlotView projectPath={currentProject.path} env={currentProject.env} dbFilename={selectedFile || undefined} />
+          <PlotView projectPath={currentProject.path} env={currentProject.env} dbFilename={selectedFile || undefined} messageSeq={messageSeq} />
         </Suspense>
       )}
       {activeTab === 'hooks' && <HookEditor projectPath={currentProject.path} env={currentProject.env} connectionStatus={connectionStatus} />}

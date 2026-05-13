@@ -7,15 +7,14 @@ import type { CsvData } from '../utils/csv'
 interface ParameterGridProps {
   projectPath: string;
   env: 'local' | 'remote';
-  messageQueueRef?: { current: any[] };
-  messageSeq?: number;
+  csvData: CsvData | null;
+  setCsvData: (data: CsvData | null) => void;
   selectedFile: string | null;
   setSelectedFile: (file: string | null) => void;
 }
 
-export function ParameterGrid({ projectPath, env, messageQueueRef, messageSeq, selectedFile, setSelectedFile }: ParameterGridProps) {
+export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedFile, setSelectedFile }: ParameterGridProps) {
   const [dataFiles, setDataFiles] = useState<string[]>([])
-  const [csvData, setCsvData] = useState<CsvData | null>(null)
   const [isDirty, setIsDirty] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -71,49 +70,7 @@ export function ParameterGrid({ projectPath, env, messageQueueRef, messageSeq, s
     loadData()
   }, [selectedFile, projectPath, env])
 
-  // Track how many messages we've already processed from the ref-based queue
-  const processedUntilRef = useRef(0)
-
-  // Handle real-time updates from global WebSocket in App.tsx
-  useEffect(() => {
-    if (!messageQueueRef?.current || !csvData) return
-
-    const queue = messageQueueRef.current
-    const unprocessed = queue.slice(processedUntilRef.current)
-    if (unprocessed.length === 0) return
-
-    setCsvData(prev => {
-      if (!prev || !prev.rows) return prev;
-      const newRows = [...prev.rows];
-      let newHeaders = [...prev.headers];
-
-      for (const update of unprocessed) {
-        const idx = newRows.findIndex(r => parseInt(r._zx_row_id || '-1') === update.row_id);
-        if (idx !== -1) {
-          const merged = {
-            ...newRows[idx],
-            _zx_status: update.status,
-            _zx_hook_stage: update.stage,
-            _zx_error: update.error,
-            ...(update.extra_data || {})
-          };
-          newRows[idx] = merged;
-
-          // Add any new columns from extra_data to headers so the table renders them
-          for (const key of Object.keys(update.extra_data || {})) {
-            if (!newHeaders.includes(key) && !key.startsWith('_zx_')) {
-              newHeaders = [...newHeaders, key];
-            }
-          }
-        }
-      }
-
-      return { ...prev, headers: newHeaders, rows: newRows };
-    });
-
-    // Advance our read pointer - never resets, so messages can never be re-processed or lost
-    processedUntilRef.current = queue.length;
-  }, [messageSeq, csvData]);
+  // Handle real-time updates now handled in App.tsx
 
   const handleSave = async () => {
     if (!selectedFile || !csvData) return

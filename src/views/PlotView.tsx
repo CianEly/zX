@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Plotly from 'plotly.js-dist'
 import createPlotlyFactory from 'react-plotly.js/factory'
 import { BarChart3, RefreshCw, AlertCircle } from 'lucide-react'
@@ -11,12 +11,14 @@ interface PlotViewProps {
   projectPath: string
   env: 'local' | 'remote'
   dbFilename?: string
+  messageSeq?: number
 }
 
-export function PlotView({ projectPath, env, dbFilename = 'zx_database.csv' }: PlotViewProps) {
+export function PlotView({ projectPath, env, dbFilename = 'zx_database.csv', messageSeq }: PlotViewProps) {
   const [figures, setFigures] = useState<Record<string, any>>({})
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const fetchPlots = async () => {
     setIsLoading(true)
@@ -43,9 +45,22 @@ export function PlotView({ projectPath, env, dbFilename = 'zx_database.csv' }: P
     }
   }
 
+  // Fetch on mount and when project/file changes
   useEffect(() => {
     fetchPlots()
   }, [projectPath, dbFilename])
+
+  // Auto-refresh when new WebSocket messages arrive (debounced 1.5s)
+  useEffect(() => {
+    if (!messageSeq) return
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      fetchPlots()
+    }, 1500)
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [messageSeq])
 
   return (
     <div className="plot-view content">

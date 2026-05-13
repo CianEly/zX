@@ -1,0 +1,16 @@
+services:
+  zx-target:
+    build: .
+    container_name: zx-remote-test
+    ports:
+      - "8001:8000" # FastAPI
+      - "2222:22"   # SSH access for asyncssh testing
+    volumes:
+      - ./backend:/app/backend
+      - ./cameltest:/app/cameltest
+      - ./test:/app/test
+      - ~/.ssh/id_ed25519.pub:/root/.ssh/authorized_keys:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: sh -c "/usr/sbin/sshd -D"
+    tty: true

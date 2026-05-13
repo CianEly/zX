@@ -1029,12 +1029,13 @@ function spawnBackend() {
 		});
 	});
 }
-ipcMain.handle("connect-ssh", async (event, { host: hostAlias, tunnelPort, user, password, identityFile }) => {
+ipcMain.handle("connect-ssh", async (event, { host: hostAlias, sshPort, tunnelPort, user, password, identityFile }) => {
 	if (sshClient) sshClient.end();
 	if (tunnelServer) tunnelServer.close();
 	currentTunnelPort = tunnelPort;
 	const config = await getSSHConfigForHost(hostAlias);
 	sshClient = new Client();
+	const finalSshPort = sshPort || config.port;
 	const sshUser = user || config.user;
 	const sshIdentityFile = identityFile || config.identityFile;
 	let privateKey;
@@ -1067,7 +1068,7 @@ ipcMain.handle("connect-ssh", async (event, { host: hostAlias, tunnelPort, user,
 			reject(err);
 		}).connect({
 			host: config.host,
-			port: config.port,
+			port: finalSshPort,
 			username: sshUser,
 			password: password || void 0,
 			privateKey: privateKey || void 0,

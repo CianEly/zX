@@ -48,6 +48,14 @@ let backendProcess: ChildProcess | null = null
 let sshClient: Client | null = null
 let tunnelServer: net.Server | null = null
 
+// SSH operation queue - prevents "Channel open failure" from concurrent SSH channel opens
+let sshQueue: Promise<any> = Promise.resolve()
+function queueSSH<T>(fn: () => Promise<T>): Promise<T> {
+  const next = sshQueue.then(() => fn()).catch(() => fn())
+  sshQueue = next.catch(() => {})
+  return next
+}
+
 const API_PORT = process.env.ZX_PORT || '8000'
 const API_TOKEN = randomBytes(32).toString('hex')
 
@@ -303,14 +311,14 @@ ipcMain.handle('read-hook', async (event, { projectPath, filename, env }: { proj
       return await readFile(join(expandedPath, 'hooks', filename), 'utf8')
     } else {
       if (!sshClient) throw new Error('No SSH connection')
-      return new Promise((resolve, reject) => {
+      return queueSSH(() => new Promise((resolve, reject) => {
         sshClient!.exec(`cat ${projectPath}/hooks/${filename}`, (err, stream) => {
           if (err) return reject(err)
           let data = ''
           stream.on('data', (d: any) => data += d.toString())
           stream.on('close', () => resolve(data))
         })
-      })
+      }))
     }
   } catch (e: any) { return `# Error reading hook: ${e.message}` }
 })
@@ -333,7 +341,7 @@ ipcMain.handle('write-hook', async (event, { projectPath, filename, content, env
       }
 
       console.log(`[write-hook] SFTP upload to: ${remoteTarget}`)
-      await uploadFile(sshClient, tempT, remoteTarget)
+      await queueSSH(() => uploadFile(sshClient!, tempT, remoteTarget))
       console.log(`[write-hook] Success: ${remoteTarget}`)
       return { success: true }
     }
@@ -373,14 +381,14 @@ ipcMain.handle('read-data', async (event, { projectPath, filename, env }: { proj
       return await readFile(join(expandedPath, 'data', filename), 'utf8')
     } else {
       if (!sshClient) throw new Error('No SSH connection')
-      return new Promise((resolve, reject) => {
+      return queueSSH(() => new Promise((resolve, reject) => {
         sshClient!.exec(`cat ${projectPath}/data/${filename}`, (err, stream) => {
           if (err) return reject(err)
           let data = ''
           stream.on('data', (d: any) => data += d.toString())
           stream.on('close', () => resolve(data))
         })
-      })
+      }))
     }
   } catch (e: any) { return `# Error reading data: ${e.message}` }
 })
@@ -400,7 +408,7 @@ ipcMain.handle('write-data', async (event, { projectPath, filename, content, env
       if (remoteTarget.startsWith('~/')) {
         remoteTarget = remoteTarget.slice(2)
       }
-      await uploadFile(sshClient, tempT, remoteTarget)
+      await queueSSH(() => uploadFile(sshClient!, tempT, remoteTarget))
       return { success: true }
     }
   } catch (e: any) { 
@@ -490,7 +498,7 @@ function spawnBackend() {
 }
 
 // Remote SSH Connection & Bootstrapping
-ipcMain.handle('connect-ssh', async (event, { host: hostAlias, tunnelPort, user, password, identityFile }) => {
+ipcMain.handle('connect-ssh', async (event, { host: hostAlias, sshPort, tunnelPort, user, password, identityFile }) => {
 
 
   if (sshClient) sshClient.end()
@@ -500,6 +508,7 @@ ipcMain.handle('connect-ssh', async (event, { host: hostAlias, tunnelPort, user,
   const config = await getSSHConfigForHost(hostAlias)
   sshClient = new Client()
 
+  const finalSshPort = sshPort || config.port
   const sshUser = user || config.user
   const sshIdentityFile = identityFile || config.identityFile
   
@@ -545,7 +554,7 @@ ipcMain.handle('connect-ssh', async (event, { host: hostAlias, tunnelPort, user,
 
     }).connect({
       host: config.host,
-      port: config.port,
+      port: finalSshPort,
       username: sshUser,
       password: password || undefined,
       privateKey: privateKey || undefined,

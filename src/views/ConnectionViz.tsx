@@ -9,7 +9,8 @@ interface ConnectionVizProps {
 export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizProps) {
   const [env, setEnv] = useState<'local' | 'remote'>(initialEnv)
   const [sshHosts, setSshHosts] = useState<string[]>([])
-  const [selectedHost, setSelectedHost] = useState('')
+  const [selectedHost, setSelectedHost] = useState('localhost')
+  const [sshPort, setSshPort] = useState('2222')
   const [tunnelPort, setTunnelPort] = useState('18432')
   const [user, setUser] = useState('')
   const [identityFile, setIdentityFile] = useState('~/.ssh/id_ed25519')
@@ -54,6 +55,7 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
       } else {
         const res = await window.ipcRenderer.connectSsh({
           host: selectedHost,
+          sshPort: parseInt(sshPort),
           tunnelPort: parseInt(tunnelPort),
           user: user || undefined,
           identityFile: identityFile || undefined
@@ -96,17 +98,26 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
           {env === 'remote' && (
             <>
               <div className="label">ssh host</div>
-              <select
+              <div style={{ position: 'relative' }}>
+                <input
+                  className="field"
+                  placeholder="e.g. localhost or remote-server"
+                  value={selectedHost}
+                  onChange={(e) => setSelectedHost(e.target.value)}
+                  list="ssh-host-list"
+                />
+                <datalist id="ssh-host-list">
+                  {sshHosts.map(host => <option key={host} value={host} />)}
+                </datalist>
+              </div>
+              <div className="label">ssh port</div>
+              <input
                 className="field"
-                value={selectedHost}
-                onChange={(e) => setSelectedHost(e.target.value)}
-              >
-                {sshHosts.length > 0 ? (
-                  sshHosts.map(host => <option key={host}>{host}</option>)
-                ) : (
-                  <option disabled>No hosts found in ~/.ssh/config</option>
-                )}
-              </select>
+                value={sshPort}
+                onChange={(e) => setSshPort(e.target.value)}
+                type="text"
+                placeholder="22"
+              />
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <div>
                   <div className="label">tunnel port</div>

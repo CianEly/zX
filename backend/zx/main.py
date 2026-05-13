@@ -155,7 +155,8 @@ async def get_plots(project_path: str, db_filename: str = "zx_database.csv"):
 def main():
     import uvicorn
     port = int(os.getenv("ZX_PORT", 8000))
-    uvicorn.run(app, host="127.0.0.1", port=port)
+    host = os.getenv("ZX_HOST", "0.0.0.0")
+    uvicorn.run(app, host=host, port=port)
 
 if __name__ == "__main__":
     main()
