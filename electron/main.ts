@@ -97,8 +97,11 @@ ipcMain.on('create-terminal', (event, { terminalId, env, cols, rows, cwd }: {
       mainWindow?.webContents.send(`terminal-data:${terminalId}`, data)
     })
     ptyProcess.onExit(() => {
-      mainWindow?.webContents.send(`terminal-exit:${terminalId}`)
-      terminalSessions.delete(terminalId)
+      const currentSession = terminalSessions.get(terminalId)
+      if (currentSession && currentSession.type === 'local' && currentSession.pty === ptyProcess) {
+        mainWindow?.webContents.send(`terminal-exit:${terminalId}`)
+        terminalSessions.delete(terminalId)
+      }
     })
   } else {
     // Remote SSH shell
@@ -119,8 +122,11 @@ ipcMain.on('create-terminal', (event, { terminalId, env, cols, rows, cwd }: {
         mainWindow?.webContents.send(`terminal-data:${terminalId}`, data.toString())
       })
       stream.on('close', () => {
-        mainWindow?.webContents.send(`terminal-exit:${terminalId}`)
-        terminalSessions.delete(terminalId)
+        const currentSession = terminalSessions.get(terminalId)
+        if (currentSession && currentSession.type === 'remote' && currentSession.stream === stream) {
+          mainWindow?.webContents.send(`terminal-exit:${terminalId}`)
+          terminalSessions.delete(terminalId)
+        }
       })
     })
   }

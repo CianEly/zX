@@ -45,6 +45,8 @@ function TerminalInstance({ id, env, projectPath, isFocused, onFocus, onSplitH, 
   useEffect(() => {
     if (!containerRef.current) return
 
+    const sessionId = `${id}-${Math.random().toString(36).substring(7)}`
+
     const term = new Terminal({
       theme: {
         background: '#0A0B0F',
@@ -97,36 +99,53 @@ function TerminalInstance({ id, env, projectPath, isFocused, onFocus, onSplitH, 
     })
 
     // Stream data from backend → xterm
-    const offData = window.ipcRenderer.onTerminalData(id, (data) => {
+    const offData = window.ipcRenderer.onTerminalData(sessionId, (data) => {
       term.write(data)
     })
 
     // Handle backend exit
-    const offExit = window.ipcRenderer.onTerminalExit(id, () => {
+    const offExit = window.ipcRenderer.onTerminalExit(sessionId, () => {
       setExited(true)
       term.write('\r\n\x1b[1;31m[Process exited]\x1b[0m\r\n')
     })
 
     // Stream input: xterm → backend
     const disposeInput = term.onData((data) => {
-      window.ipcRenderer.writeTerminal(id, data)
+      window.ipcRenderer.writeTerminal(sessionId, data)
     })
 
     // ResizeObserver to auto-fit when container size changes
     const ro = new ResizeObserver(() => {
       try {
         fit.fit()
-        window.ipcRenderer.resizeTerminal(id, term.cols, term.rows)
+        window.ipcRenderer.resizeTerminal(sessionId, term.cols, term.rows)
       } catch {}
     })
     ro.observe(containerRef.current)
 
+    // Defer the PTY spawn until after the first layout paint so that
+    // fit.fit() produces valid cols/rows (avoids posix_spawnp on size 0)
+    let rafId: number
+    rafId = requestAnimationFrame(() => {
+      try { fit.fit() } catch {}
+      const cols = Math.max(term.cols || 80, 10)
+      const rows = Math.max(term.rows || 24, 5)
+      window.ipcRenderer.createTerminal({
+        terminalId: sessionId,
+        env,
+        cols,
+        rows,
+        cwd: env === 'local' ? projectPath : undefined,
+      })
+    })
+
     return () => {
+      cancelAnimationFrame(rafId)
       offData()
       offExit()
       disposeInput.dispose()
       ro.disconnect()
-      window.ipcRenderer.closeTerminal(id)
+      window.ipcRenderer.closeTerminal(sessionId)
       term.dispose()
     }
   }, [id, env, projectPath])
