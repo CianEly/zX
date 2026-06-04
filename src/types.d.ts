@@ -3,6 +3,13 @@ export interface ApiConfig {
   token: string;
 }
 
+export interface FileNode {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size?: number;
+}
+
 declare global {
   interface Window {
     ipcRenderer: {
@@ -27,6 +34,11 @@ declare global {
       connectSsh: (params: { host: string; tunnelPort: number; user?: string; password?: string; identityFile?: string }) => Promise<{ success: boolean; error?: string }>;
       spawnLocalBackend: () => Promise<{ success: boolean; error?: string }>;
       onConnectionProgress: (callback: (data: { step: number; status: string; sub?: string }) => void) => () => void;
+      // File Explorer
+      fsList: (params: { projectPath: string, env: 'local' | 'remote', targetPath?: string }) => Promise<{ success: boolean; files?: FileNode[]; error?: string }>;
+      fsRead: (params: { path: string, env: 'local' | 'remote' }) => Promise<{ success: boolean; content?: string; error?: string }>;
+      fsDelete: (params: { path: string, env: 'local' | 'remote' }) => Promise<{ success: boolean; error?: string }>;
+      fsRename: (params: { oldPath: string, newPath: string, env: 'local' | 'remote' }) => Promise<{ success: boolean; error?: string }>;
       // Terminal
       createTerminal: (params: { terminalId: string; env: 'local' | 'remote'; cols: number; rows: number; cwd?: string }) => void;
       writeTerminal: (terminalId: string, data: string) => void;

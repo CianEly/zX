@@ -35,6 +35,11 @@ try {
       ipcRenderer.on('connection-progress', listener)
       return () => ipcRenderer.off('connection-progress', listener)
     },
+    // ─── File Explorer IPC ──────────────────────────────────────────────────
+    fsList: (params: { projectPath: string, env: 'local' | 'remote', targetPath?: string }) => ipcRenderer.invoke('fs-list', params),
+    fsRead: (params: { path: string, env: 'local' | 'remote' }) => ipcRenderer.invoke('fs-read', params),
+    fsDelete: (params: { path: string, env: 'local' | 'remote' }) => ipcRenderer.invoke('fs-delete', params),
+    fsRename: (params: { oldPath: string, newPath: string, env: 'local' | 'remote' }) => ipcRenderer.invoke('fs-rename', params),
     // ─── Terminal IPC ───────────────────────────────────────────────────────
     createTerminal: (params: { terminalId: string; env: 'local' | 'remote'; cols: number; rows: number; cwd?: string }) =>
       ipcRenderer.send('create-terminal', params),

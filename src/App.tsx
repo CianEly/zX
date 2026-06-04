@@ -6,6 +6,7 @@ import { ConnectionViz } from './views/ConnectionViz'
 import { HookEditor } from './views/HookEditor'
 import { ProjectManager } from './views/ProjectManager'
 import { TerminalPanel } from './views/TerminalPanel'
+import { FileExplorer } from './views/FileExplorer'
 import React, { Suspense, lazy } from 'react'
 
 const PlotView = lazy(() => import('./views/PlotView').then(m => ({ default: m.PlotView })))
@@ -195,7 +196,7 @@ export default function App() {
       )}
       {activeTab === 'hooks' && <HookEditor projectPath={currentProject.path} env={currentProject.env} connectionStatus={connectionStatus} />}
       {activeTab === 'terminal' && <TerminalPanel env={currentProject.env} projectPath={currentProject.path} />}
-      {activeTab === 'files' && <div className="content"><div style={{ color: 'var(--text3)' }}>Files panel placeholder</div></div>}
+      {activeTab === 'files' && <FileExplorer env={currentProject.env} projectPath={currentProject.path} />}
     </Layout>
   )
 }

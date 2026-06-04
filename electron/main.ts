@@ -4,7 +4,7 @@ import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { readFile, access, writeFile, mkdir, readdir } from 'node:fs/promises'
+import { readFile, access, writeFile, mkdir, readdir, rm, rename, stat } from 'node:fs/promises'
 import { hookTemplates } from './templates'
 import { constants } from 'node:fs'
 import { homedir, userInfo, platform } from 'node:os'
@@ -777,6 +777,127 @@ function uploadFile(conn: Client, localPath: string, remotePath: string): Promis
     })
   })
 }
+
+// ─── File Explorer IPC ───────────────────────────────────────────────────────
+
+export interface FileNode {
+  name: string
+  path: string
+  isDirectory: boolean
+  size?: number
+}
+
+ipcMain.handle('fs-list', async (_event, { projectPath, env, targetPath }: { projectPath: string, env: 'local' | 'remote', targetPath?: string }) => {
+  const dirPath = targetPath || projectPath
+  if (env === 'local') {
+    try {
+      const files = await readdir(dirPath, { withFileTypes: true })
+      const result: FileNode[] = []
+      for (const file of files) {
+        const fullPath = join(dirPath, file.name)
+        let size = 0
+        try {
+          if (!file.isDirectory()) {
+            const stats = await stat(fullPath)
+            size = stats.size
+          }
+        } catch {}
+        result.push({
+          name: file.name,
+          path: fullPath,
+          isDirectory: file.isDirectory(),
+          size
+        })
+      }
+      return { success: true, files: result.sort((a, b) => (a.isDirectory === b.isDirectory ? a.name.localeCompare(b.name) : a.isDirectory ? -1 : 1)) }
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+  } else {
+    return new Promise((resolve) => {
+      if (!sshClient) return resolve({ success: false, error: 'Not connected' })
+      sshClient.sftp((err, sftp) => {
+        if (err) return resolve({ success: false, error: err.message })
+        sftp.readdir(dirPath, (err, list) => {
+          if (err) return resolve({ success: false, error: err.message })
+          const result: FileNode[] = list.map(item => ({
+            name: item.filename,
+            path: `${dirPath}/${item.filename}`.replace(/\/\//g, '/'),
+            isDirectory: item.attrs.isDirectory(),
+            size: item.attrs.size
+          }))
+          resolve({ success: true, files: result.sort((a, b) => (a.isDirectory === b.isDirectory ? a.name.localeCompare(b.name) : a.isDirectory ? -1 : 1)) })
+        })
+      })
+    })
+  }
+})
+
+ipcMain.handle('fs-read', async (_event, { path, env }: { path: string, env: 'local' | 'remote' }) => {
+  if (env === 'local') {
+    try {
+      const content = await readFile(path, 'utf-8')
+      return { success: true, content }
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+  } else {
+    return new Promise((resolve) => {
+      if (!sshClient) return resolve({ success: false, error: 'Not connected' })
+      sshClient.sftp((err, sftp) => {
+        if (err) return resolve({ success: false, error: err.message })
+        sftp.readFile(path, 'utf-8', (err, content) => {
+          if (err) return resolve({ success: false, error: err.message })
+          resolve({ success: true, content: content.toString('utf-8') })
+        })
+      })
+    })
+  }
+})
+
+ipcMain.handle('fs-delete', async (_event, { path, env }: { path: string, env: 'local' | 'remote' }) => {
+  if (env === 'local') {
+    try {
+      await rm(path, { recursive: true, force: true })
+      return { success: true }
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+  } else {
+    return new Promise((resolve) => {
+      if (!sshClient) return resolve({ success: false, error: 'Not connected' })
+      sshClient.exec(`rm -rf "${path.replace(/"/g, '\\"')}"`, (err, stream) => {
+        if (err) return resolve({ success: false, error: err.message })
+        stream.on('close', (code: number) => {
+          if (code === 0) resolve({ success: true })
+          else resolve({ success: false, error: `Process exited with code ${code}` })
+        }).on('data', () => {}).stderr.on('data', () => {})
+      })
+    })
+  }
+})
+
+ipcMain.handle('fs-rename', async (_event, { oldPath, newPath, env }: { oldPath: string, newPath: string, env: 'local' | 'remote' }) => {
+  if (env === 'local') {
+    try {
+      await rename(oldPath, newPath)
+      return { success: true }
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+  } else {
+    return new Promise((resolve) => {
+      if (!sshClient) return resolve({ success: false, error: 'Not connected' })
+      sshClient.sftp((err, sftp) => {
+        if (err) return resolve({ success: false, error: err.message })
+        sftp.rename(oldPath, newPath, (err) => {
+          if (err) return resolve({ success: false, error: err.message })
+          resolve({ success: true })
+        })
+      })
+    })
+  }
+})
 
 function createWindow() {
   const preloadPath = join(_dirname, 'preload.cjs')
