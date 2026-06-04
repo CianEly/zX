@@ -20,11 +20,16 @@ export default function App() {
   const messageQueueRef = useRef<any[]>([])
   const [messageSeq, setMessageSeq] = useState(0)
   const socketRef = useRef<WebSocket | null>(null)
-  
+
   // Centralized CSV Data State
   const [csvData, setCsvData] = useState<any | null>(null)
   const processedUntilRef = useRef(0)
 
+  useEffect(() => {
+    window.ipcRenderer.invoke('ping').then((res) => {
+      console.log('[RENDERER IPC RESULT]', res)
+    })
+  }, [])
   // 1. Fetch config and check health (Stable Polling)
   useEffect(() => {
     const fetchAndCheck = async () => {
@@ -35,7 +40,7 @@ export default function App() {
         // Only update if values actually change to prevent re-renders
         setApiConfig(prev => {
           if (prev && prev.token === config.token && prev.port === config.port) return prev;
-          
+
           if (prev) {
             console.log('App: API Config changed, resetting connection...')
             setConnectionStatus('disconnected')
@@ -153,11 +158,11 @@ export default function App() {
 
   if (!currentProject) {
     return (
-      <ProjectManager 
+      <ProjectManager
         onProjectSelect={async (path, env) => {
           const finalPath = env === 'local' ? await window.ipcRenderer.resolvePath(path) : path
           setCurrentProject({ path: finalPath, env })
-        }} 
+        }}
       />
     )
   }
@@ -177,13 +182,13 @@ export default function App() {
     >
       {activeTab === 'connection' && <ConnectionViz projectPath={currentProject.path} env={currentProject.env} />}
       {activeTab === 'parameters' && (
-        <ParameterGrid 
-          projectPath={currentProject.path} 
-          env={currentProject.env} 
+        <ParameterGrid
+          projectPath={currentProject.path}
+          env={currentProject.env}
           csvData={csvData}
           setCsvData={setCsvData}
-          selectedFile={selectedFile} 
-          setSelectedFile={setSelectedFile} 
+          selectedFile={selectedFile}
+          setSelectedFile={setSelectedFile}
         />
       )}
       {activeTab === 'visualization' && (
