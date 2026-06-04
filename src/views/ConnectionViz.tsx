@@ -80,8 +80,8 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
   }, [steps])
 
   return (
-    <div className="layout">
-      <div className="left-pane">
+    <div className="layout" style={{ overflowY: 'auto' }}>
+      <div style={{ width: 400, margin: '60px auto', display: 'flex', flexDirection: 'column', gap: 24, paddingBottom: 40 }}>
         <div>
           <div className="pane-title">connection</div>
           <div className="seg-ctrl">
@@ -212,22 +212,6 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
             >
               {isConnecting ? 'Connecting...' : 'Connect'}
             </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="right-pane">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>visualization</div>
-          <div style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text3)' }}>
-            {env} exploration · metrics visualization
-          </div>
-        </div>
-
-        <div className="viz-placeholder" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)' }}>
-          <div style={{ textAlign: 'center' }}>
-            <Activity size={48} opacity={0.2} style={{ marginBottom: 12 }} />
-            <div>connect to a backend to see exploration results</div>
           </div>
         </div>
       </div>
