@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import os, { homedir, platform, userInfo } from "node:os";
 import * as net from "node:net";
@@ -661,8 +661,11 @@ ipcMain.on("create-terminal", (event, { terminalId, env, cols, rows, cwd }) => {
 			mainWindow?.webContents.send(`terminal-data:${terminalId}`, data);
 		});
 		ptyProcess.onExit(() => {
-			mainWindow?.webContents.send(`terminal-exit:${terminalId}`);
-			terminalSessions.delete(terminalId);
+			const currentSession = terminalSessions.get(terminalId);
+			if (currentSession && currentSession.type === "local" && currentSession.pty === ptyProcess) {
+				mainWindow?.webContents.send(`terminal-exit:${terminalId}`);
+				terminalSessions.delete(terminalId);
+			}
 		});
 	} else {
 		if (!sshClient) {
@@ -689,8 +692,11 @@ ipcMain.on("create-terminal", (event, { terminalId, env, cols, rows, cwd }) => {
 				mainWindow?.webContents.send(`terminal-data:${terminalId}`, data.toString());
 			});
 			stream.on("close", () => {
-				mainWindow?.webContents.send(`terminal-exit:${terminalId}`);
-				terminalSessions.delete(terminalId);
+				const currentSession = terminalSessions.get(terminalId);
+				if (currentSession && currentSession.type === "remote" && currentSession.stream === stream) {
+					mainWindow?.webContents.send(`terminal-exit:${terminalId}`);
+					terminalSessions.delete(terminalId);
+				}
 			});
 		});
 	}
@@ -1252,6 +1258,160 @@ function uploadFile(conn, localPath, remotePath) {
 		});
 	});
 }
+ipcMain.handle("fs-list", async (_event, { projectPath, env, targetPath }) => {
+	const dirPath = targetPath || projectPath;
+	if (env === "local") try {
+		const files = await readdir(dirPath, { withFileTypes: true });
+		const result = [];
+		for (const file of files) {
+			const fullPath = join(dirPath, file.name);
+			let size = 0;
+			try {
+				if (!file.isDirectory()) size = (await stat(fullPath)).size;
+			} catch {}
+			result.push({
+				name: file.name,
+				path: fullPath,
+				isDirectory: file.isDirectory(),
+				size
+			});
+		}
+		return {
+			success: true,
+			files: result.sort((a, b) => a.isDirectory === b.isDirectory ? a.name.localeCompare(b.name) : a.isDirectory ? -1 : 1)
+		};
+	} catch (e) {
+		return {
+			success: false,
+			error: e.message
+		};
+	}
+	else return new Promise((resolve) => {
+		if (!sshClient) return resolve({
+			success: false,
+			error: "Not connected"
+		});
+		sshClient.sftp((err, sftp) => {
+			if (err) return resolve({
+				success: false,
+				error: err.message
+			});
+			sftp.readdir(dirPath, (err, list) => {
+				if (err) return resolve({
+					success: false,
+					error: err.message
+				});
+				resolve({
+					success: true,
+					files: list.map((item) => ({
+						name: item.filename,
+						path: `${dirPath}/${item.filename}`.replace(/\/\//g, "/"),
+						isDirectory: item.attrs.isDirectory(),
+						size: item.attrs.size
+					})).sort((a, b) => a.isDirectory === b.isDirectory ? a.name.localeCompare(b.name) : a.isDirectory ? -1 : 1)
+				});
+			});
+		});
+	});
+});
+ipcMain.handle("fs-read", async (_event, { path, env }) => {
+	if (env === "local") try {
+		return {
+			success: true,
+			content: await readFile(path, "utf-8")
+		};
+	} catch (e) {
+		return {
+			success: false,
+			error: e.message
+		};
+	}
+	else return new Promise((resolve) => {
+		if (!sshClient) return resolve({
+			success: false,
+			error: "Not connected"
+		});
+		sshClient.sftp((err, sftp) => {
+			if (err) return resolve({
+				success: false,
+				error: err.message
+			});
+			sftp.readFile(path, "utf-8", (err, content) => {
+				if (err) return resolve({
+					success: false,
+					error: err.message
+				});
+				resolve({
+					success: true,
+					content: content.toString("utf-8")
+				});
+			});
+		});
+	});
+});
+ipcMain.handle("fs-delete", async (_event, { path, env }) => {
+	if (env === "local") try {
+		await rm(path, {
+			recursive: true,
+			force: true
+		});
+		return { success: true };
+	} catch (e) {
+		return {
+			success: false,
+			error: e.message
+		};
+	}
+	else return new Promise((resolve) => {
+		if (!sshClient) return resolve({
+			success: false,
+			error: "Not connected"
+		});
+		sshClient.exec(`rm -rf "${path.replace(/"/g, "\\\"")}"`, (err, stream) => {
+			if (err) return resolve({
+				success: false,
+				error: err.message
+			});
+			stream.on("close", (code) => {
+				if (code === 0) resolve({ success: true });
+				else resolve({
+					success: false,
+					error: `Process exited with code ${code}`
+				});
+			}).on("data", () => {}).stderr.on("data", () => {});
+		});
+	});
+});
+ipcMain.handle("fs-rename", async (_event, { oldPath, newPath, env }) => {
+	if (env === "local") try {
+		await rename(oldPath, newPath);
+		return { success: true };
+	} catch (e) {
+		return {
+			success: false,
+			error: e.message
+		};
+	}
+	else return new Promise((resolve) => {
+		if (!sshClient) return resolve({
+			success: false,
+			error: "Not connected"
+		});
+		sshClient.sftp((err, sftp) => {
+			if (err) return resolve({
+				success: false,
+				error: err.message
+			});
+			sftp.rename(oldPath, newPath, (err) => {
+				if (err) return resolve({
+					success: false,
+					error: err.message
+				});
+				resolve({ success: true });
+			});
+		});
+	});
+});
 function createWindow() {
 	mainWindow = new BrowserWindow({
 		width: 1200,

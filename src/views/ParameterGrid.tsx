@@ -39,7 +39,13 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
     try {
       const files = await window.ipcRenderer.listData({ projectPath, env })
       setDataFiles(files)
-      if (files.length > 0 && !selectedFile) {
+      
+      // We must handle the current selectedFile being passed down from App
+      // Since closures might capture stale state, we use functional update on setSelectedFile?
+      // Actually we just check against the `files` array.
+      if (selectedFile && !files.includes(selectedFile)) {
+        setSelectedFile(null)
+      } else if (files.length > 0 && !selectedFile) {
         setSelectedFile(files[0])
       }
     } catch (err) {
@@ -90,7 +96,8 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
   }
 
   const handleExecute = async () => {
-    if (selectedRowIds.size === 0 || !selectedFile) return
+    if (!selectedFile) return
+    if (selectedRowIds.size === 0 && !window.confirm("No rows selected. Do you want to run the Initialization Hook to generate rows?")) return
     setIsExecuting(true)
     try {
       const config = await window.ipcRenderer.getApiConfig()
@@ -161,6 +168,21 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
       }
     } catch (err) {
       alert('Error importing data: ' + err)
+    }
+  }
+
+  const handleCreateDb = async () => {
+    try {
+      const content = "_zx_row_id,_zx_status\n"
+      const res = await window.ipcRenderer.writeData({ projectPath, filename: 'zx_database.csv', content, env })
+      if (res.success) {
+        await refreshDataFiles()
+        setSelectedFile('zx_database.csv')
+      } else {
+        alert('Failed to create database: ' + res.error)
+      }
+    } catch (err) {
+      alert('Error creating database: ' + err)
     }
   }
 
@@ -319,12 +341,12 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
           <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 16, background: '#0D0E12' }}>
             <button 
               onClick={handleExecute}
-              disabled={isExecuting || selectedRowIds.size === 0}
+              disabled={isExecuting}
               className="btn btn-accent"
               style={{ padding: '6px 16px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}
             >
               <Icon name="Play" size={14} />
-              Run Exploration ({selectedRowIds.size})
+              {selectedRowIds.size > 0 ? `Run Exploration (${selectedRowIds.size})` : `Initialize Exploration`}
             </button>
             <button 
               onClick={handleStop}
@@ -359,8 +381,11 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
             {!selectedFile ? (
               <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: 'var(--text3)' }}>
                 <Icon name="TableProperties" size={48} />
-                <p style={{ marginTop: 16 }}>Select a data file or import a CSV to begin</p>
-                <button className="btn" style={{ marginTop: 16 }} onClick={handleImport}>Import CSV</button>
+                <p style={{ marginTop: 16 }}>Select a data file or create one to begin</p>
+                <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
+                  <button className="btn" onClick={handleImport}>Import CSV</button>
+                  <button className="btn btn-accent" onClick={handleCreateDb}>Initialize Database</button>
+                </div>
               </div>
             ) : csvData && csvData.headers.length > 0 ? (
               <table className="param-table">
@@ -403,7 +428,7 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
                           <td key={header}>
                             <input 
                               className="cell-input"
-                              value={row[header] || ''}
+                              value={row[header] !== undefined && row[header] !== null ? row[header] : ''}
                               onChange={e => handleCellChange(i, header, e.target.value)}
                             />
                           </td>

@@ -129,6 +129,21 @@ export default function App() {
       let newHeaders = [...prev.headers];
 
       for (const update of unprocessed) {
+        if (update.row_id === -1 && update.status === 'exploration_new_rows') {
+          const addedRows = update.extra_data?.new_rows || []
+          for (const r of addedRows) {
+             if (!newRows.find(existing => existing._zx_row_id == r._zx_row_id)) {
+                 newRows.push(r)
+             }
+             for (const key of Object.keys(r)) {
+                 if (!newHeaders.includes(key)) {
+                     newHeaders.push(key)
+                 }
+             }
+          }
+          continue
+        }
+
         const idx = newRows.findIndex(r => parseInt(r._zx_row_id || '-1') === update.row_id);
         if (idx !== -1) {
           const merged = {

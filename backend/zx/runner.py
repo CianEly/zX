@@ -49,8 +49,16 @@ class ExecutionRunner:
             else:
                 self.on_update(data)
 
+    def _read_db(self) -> pd.DataFrame:
+        if self.db_path.exists():
+            try:
+                return pd.read_csv(self.db_path)
+            except Exception:
+                pass
+        return pd.DataFrame()
+
     def _update_csv(self, row_id: int, updates: Dict[str, Any]):
-        df = pd.read_csv(self.db_path)
+        df = self._read_db()
         
         # Ensure _zx_ columns exist and are treated as strings
         zx_cols = ["_zx_status", "_zx_hook_stage", "_zx_error", "_zx_started_at", "_zx_completed_at", "_zx_run_dir"]
@@ -86,7 +94,7 @@ class ExecutionRunner:
         df.to_csv(self.db_path, index=False)
 
     def _setup_run_dir(self, row_id: int) -> Path:
-        run_dir = self.project_path / f"run_{row_id}"
+        run_dir = self.project_path / "runs" / f"run_{row_id}"
         run_dir.mkdir(parents=True, exist_ok=True)
         return run_dir
 
@@ -107,7 +115,7 @@ class ExecutionRunner:
                 sys.stderr = old_stderr
 
     def _append_rows(self, new_rows: List[Dict[str, Any]], iteration: int) -> List[int]:
-        df = pd.read_csv(self.db_path)
+        df = self._read_db()
         
         # Ensure _zx_ columns exist
         zx_cols = ["_zx_row_id", "_zx_status", "_zx_hook_stage", "_zx_error", "_zx_started_at", "_zx_completed_at", "_zx_run_dir", "_zx_iteration"]
@@ -166,9 +174,12 @@ class ExecutionRunner:
             init_hook = self.hook_manager.get_initialize()
             current_row_ids = row_ids
             
+            if not current_row_ids:
+                self.state = {}
+            
             if init_hook and not dry_run:
                 print(f"Running initialization hook...")
-                df = pd.read_csv(self.db_path)
+                df = self._read_db()
                 result = await asyncio.to_thread(init_hook, df, self.state)
                 
                 # Result can be (new_rows, new_state) or just new_rows
@@ -183,6 +194,11 @@ class ExecutionRunner:
                     added = self._append_rows(new_rows, 0)
                     if not current_row_ids:
                         current_row_ids = added
+                    
+                    df_all = self._read_db().fillna("")
+                    added_df = df_all[df_all["_zx_row_id"].isin(added)]
+                    added_rows = added_df.to_dict(orient="records")
+                    await self._emit_update(-1, "exploration_new_rows", extra_data={"new_rows": added_rows, "iteration": 0})
 
             current_iteration = self.state.get("_zx_iteration", 0)
 
@@ -202,7 +218,7 @@ class ExecutionRunner:
                     break
 
                 print(f"--- Iteration {current_iteration} complete. Running exploration... ---")
-                df = pd.read_csv(self.db_path)
+                df = self._read_db()
                 new_rows = await asyncio.to_thread(explore_hook, df, self.state)
 
                 if not new_rows:
@@ -220,8 +236,11 @@ class ExecutionRunner:
                 self.state["_zx_iteration"] = current_iteration
                 current_row_ids = self._append_rows(new_rows, current_iteration)
                 
-                # Send a signal to the UI that the table has grown
-                await self._emit_update(-1, "exploration_new_rows", extra_data={"new_ids": current_row_ids, "iteration": current_iteration})
+                # Send a signal to the UI with the full row data
+                df_all = self._read_db().fillna("")
+                added_df = df_all[df_all["_zx_row_id"].isin(current_row_ids)]
+                added_rows = added_df.to_dict(orient="records")
+                await self._emit_update(-1, "exploration_new_rows", extra_data={"new_rows": added_rows, "iteration": current_iteration})
 
         finally:
             self.is_running = False
@@ -239,7 +258,7 @@ class ExecutionRunner:
         await self._emit_update(row_id, "running", "starting", extra_data=start_updates)
         self._update_csv(row_id, start_updates)
 
-        df = pd.read_csv(self.db_path)
+        df = self._read_db()
         mask = None
         if "_zx_row_id" in df.columns:
             # Force numeric comparison to avoid type mismatch (int vs float vs string)
