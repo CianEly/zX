@@ -5,9 +5,10 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
-import os, { homedir, userInfo } from "node:os";
+import os, { homedir, platform, userInfo } from "node:os";
 import * as net from "node:net";
 import { Client } from "ssh2";
+import * as pty from "node-pty";
 //#region electron/templates.ts
 var hookTemplates = {
 	"initialize.py": `def initialize(table, state: dict) -> tuple[list[dict], dict]:
@@ -626,6 +627,97 @@ var mainWindow = null;
 var backendProcess = null;
 var sshClient = null;
 var tunnelServer = null;
+var sshQueue = Promise.resolve();
+function queueSSH(fn) {
+	const next = sshQueue.then(() => fn()).catch(() => fn());
+	sshQueue = next.catch(() => {});
+	return next;
+}
+var terminalSessions = /* @__PURE__ */ new Map();
+function destroyAllTerminals() {
+	for (const [id, session] of terminalSessions.entries()) {
+		try {
+			if (session.type === "local") session.pty.kill();
+			else session.stream.end();
+		} catch {}
+		terminalSessions.delete(id);
+	}
+}
+ipcMain.on("create-terminal", (event, { terminalId, env, cols, rows, cwd }) => {
+	if (env === "local") {
+		const shell = process.env.SHELL || (platform() === "win32" ? "cmd.exe" : platform() === "darwin" ? "/bin/zsh" : "/bin/bash");
+		const ptyProcess = pty.spawn(shell, [], {
+			name: "xterm-256color",
+			cols: cols || 80,
+			rows: rows || 24,
+			cwd: cwd || homedir(),
+			env: process.env
+		});
+		terminalSessions.set(terminalId, {
+			type: "local",
+			pty: ptyProcess
+		});
+		ptyProcess.onData((data) => {
+			mainWindow?.webContents.send(`terminal-data:${terminalId}`, data);
+		});
+		ptyProcess.onExit(() => {
+			mainWindow?.webContents.send(`terminal-exit:${terminalId}`);
+			terminalSessions.delete(terminalId);
+		});
+	} else {
+		if (!sshClient) {
+			event.sender.send(`terminal-exit:${terminalId}`);
+			return;
+		}
+		sshClient.shell({
+			term: "xterm-256color",
+			cols: cols || 80,
+			rows: rows || 24
+		}, (err, stream) => {
+			if (err) {
+				event.sender.send(`terminal-exit:${terminalId}`);
+				return;
+			}
+			terminalSessions.set(terminalId, {
+				type: "remote",
+				stream
+			});
+			stream.on("data", (data) => {
+				mainWindow?.webContents.send(`terminal-data:${terminalId}`, data.toString());
+			});
+			stream.stderr.on("data", (data) => {
+				mainWindow?.webContents.send(`terminal-data:${terminalId}`, data.toString());
+			});
+			stream.on("close", () => {
+				mainWindow?.webContents.send(`terminal-exit:${terminalId}`);
+				terminalSessions.delete(terminalId);
+			});
+		});
+	}
+});
+ipcMain.on("write-terminal", (_event, { terminalId, data }) => {
+	const session = terminalSessions.get(terminalId);
+	if (!session) return;
+	if (session.type === "local") session.pty.write(data);
+	else session.stream.write(data);
+});
+ipcMain.on("resize-terminal", (_event, { terminalId, cols, rows }) => {
+	const session = terminalSessions.get(terminalId);
+	if (!session) return;
+	if (session.type === "local") session.pty.resize(cols, rows);
+	else try {
+		session.stream.setWindow(rows, cols, 0, 0);
+	} catch {}
+});
+ipcMain.on("close-terminal", (_event, { terminalId }) => {
+	const session = terminalSessions.get(terminalId);
+	if (!session) return;
+	try {
+		if (session.type === "local") session.pty.kill();
+		else session.stream.end();
+	} catch {}
+	terminalSessions.delete(terminalId);
+});
 var API_PORT = process.env.ZX_PORT || "8000";
 var API_TOKEN = randomBytes(32).toString("hex");
 ipcMain.handle("get-api-config", () => {
@@ -852,14 +944,14 @@ ipcMain.handle("read-hook", async (event, { projectPath, filename, env }) => {
 		if (env === "local") return await readFile(join(resolvePath(projectPath), "hooks", filename), "utf8");
 		else {
 			if (!sshClient) throw new Error("No SSH connection");
-			return new Promise((resolve, reject) => {
+			return queueSSH(() => new Promise((resolve, reject) => {
 				sshClient.exec(`cat ${projectPath}/hooks/${filename}`, (err, stream) => {
 					if (err) return reject(err);
 					let data = "";
 					stream.on("data", (d) => data += d.toString());
 					stream.on("close", () => resolve(data));
 				});
-			});
+			}));
 		}
 	} catch (e) {
 		return `# Error reading hook: ${e.message}`;
@@ -878,7 +970,7 @@ ipcMain.handle("write-hook", async (event, { projectPath, filename, content, env
 			let remoteTarget = `${projectPath}/hooks/${filename}`;
 			if (remoteTarget.startsWith("~/")) remoteTarget = remoteTarget.slice(2);
 			console.log(`[write-hook] SFTP upload to: ${remoteTarget}`);
-			await uploadFile(sshClient, tempT, remoteTarget);
+			await queueSSH(() => uploadFile(sshClient, tempT, remoteTarget));
 			console.log(`[write-hook] Success: ${remoteTarget}`);
 			return { success: true };
 		}
@@ -915,14 +1007,14 @@ ipcMain.handle("read-data", async (event, { projectPath, filename, env }) => {
 		if (env === "local") return await readFile(join(resolvePath(projectPath), "data", filename), "utf8");
 		else {
 			if (!sshClient) throw new Error("No SSH connection");
-			return new Promise((resolve, reject) => {
+			return queueSSH(() => new Promise((resolve, reject) => {
 				sshClient.exec(`cat ${projectPath}/data/${filename}`, (err, stream) => {
 					if (err) return reject(err);
 					let data = "";
 					stream.on("data", (d) => data += d.toString());
 					stream.on("close", () => resolve(data));
 				});
-			});
+			}));
 		}
 	} catch (e) {
 		return `# Error reading data: ${e.message}`;
@@ -939,7 +1031,7 @@ ipcMain.handle("write-data", async (event, { projectPath, filename, content, env
 			await writeFile(tempT, content);
 			let remoteTarget = `${projectPath}/data/${filename}`;
 			if (remoteTarget.startsWith("~/")) remoteTarget = remoteTarget.slice(2);
-			await uploadFile(sshClient, tempT, remoteTarget);
+			await queueSSH(() => uploadFile(sshClient, tempT, remoteTarget));
 			return { success: true };
 		}
 	} catch (e) {
@@ -1176,12 +1268,14 @@ function createWindow() {
 	else mainWindow.loadFile(join(_dirname, "../dist/index.html"));
 }
 app.on("window-all-closed", () => {
+	destroyAllTerminals();
 	if (backendProcess) backendProcess.kill();
 	if (sshClient) sshClient.end();
 	if (tunnelServer) tunnelServer.close();
 	if (process.platform !== "darwin") app.quit();
 });
 app.on("quit", () => {
+	destroyAllTerminals();
 	if (backendProcess) backendProcess.kill();
 	if (sshClient) sshClient.end();
 	if (tunnelServer) tunnelServer.close();

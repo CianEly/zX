@@ -7,8 +7,8 @@ declare global {
   interface Window {
     ipcRenderer: {
       send: (channel: string, ...args: any[]) => void;
-      on: (channel: string, listener: (event: any, ...args: any[]) => void) => void;
-      off: (channel: string, listener: (event: any, ...args: any[]) => void) => void;
+      on: (channel: string, listener: (...args: any[]) => void) => void;
+      off: (channel: string, listener: (...args: any[]) => void) => void;
       invoke: (channel: string, ...args: any[]) => Promise<any>;
       getApiConfig: () => Promise<ApiConfig>;
       getSshHosts: () => Promise<string[]>;
@@ -27,6 +27,13 @@ declare global {
       connectSsh: (params: { host: string; tunnelPort: number; user?: string; password?: string; identityFile?: string }) => Promise<{ success: boolean; error?: string }>;
       spawnLocalBackend: () => Promise<{ success: boolean; error?: string }>;
       onConnectionProgress: (callback: (data: { step: number; status: string; sub?: string }) => void) => () => void;
+      // Terminal
+      createTerminal: (params: { terminalId: string; env: 'local' | 'remote'; cols: number; rows: number; cwd?: string }) => void;
+      writeTerminal: (terminalId: string, data: string) => void;
+      resizeTerminal: (terminalId: string, cols: number, rows: number) => void;
+      closeTerminal: (terminalId: string) => void;
+      onTerminalData: (terminalId: string, callback: (data: string) => void) => () => void;
+      onTerminalExit: (terminalId: string, callback: () => void) => () => void;
     };
   }
 }

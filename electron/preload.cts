@@ -33,8 +33,27 @@ try {
     onConnectionProgress: (callback: (data: any) => void) => {
       const listener = (_event: any, data: any) => callback(data)
       ipcRenderer.on('connection-progress', listener)
-      return () => ipcRenderer.off('connection-progress', listener) // Return uninstaller
-    }
+      return () => ipcRenderer.off('connection-progress', listener)
+    },
+    // ─── Terminal IPC ───────────────────────────────────────────────────────
+    createTerminal: (params: { terminalId: string; env: 'local' | 'remote'; cols: number; rows: number; cwd?: string }) =>
+      ipcRenderer.send('create-terminal', params),
+    writeTerminal: (terminalId: string, data: string) =>
+      ipcRenderer.send('write-terminal', { terminalId, data }),
+    resizeTerminal: (terminalId: string, cols: number, rows: number) =>
+      ipcRenderer.send('resize-terminal', { terminalId, cols, rows }),
+    closeTerminal: (terminalId: string) =>
+      ipcRenderer.send('close-terminal', { terminalId }),
+    onTerminalData: (terminalId: string, callback: (data: string) => void) => {
+      const listener = (_event: any, data: string) => callback(data)
+      ipcRenderer.on(`terminal-data:${terminalId}`, listener)
+      return () => ipcRenderer.off(`terminal-data:${terminalId}`, listener)
+    },
+    onTerminalExit: (terminalId: string, callback: () => void) => {
+      const listener = () => callback()
+      ipcRenderer.on(`terminal-exit:${terminalId}`, listener)
+      return () => ipcRenderer.off(`terminal-exit:${terminalId}`, listener)
+    },
   })
   console.log('IPC Bridge exposed successfully')
 } catch (e) {

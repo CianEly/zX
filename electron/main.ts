@@ -7,10 +7,12 @@ import { randomBytes } from 'node:crypto'
 import { readFile, access, writeFile, mkdir, readdir } from 'node:fs/promises'
 import { hookTemplates } from './templates'
 import { constants } from 'node:fs'
-import { homedir, userInfo } from 'node:os'
+import { homedir, userInfo, platform } from 'node:os'
 import * as net from 'node:net'
 import SSHConfig from 'ssh-config'
-import { Client } from 'ssh2'
+import { Client, type ClientChannel } from 'ssh2'
+import * as pty from 'node-pty'
+import type { IPty } from 'node-pty'
 
 let currentTunnelPort: number | null = null
 
@@ -55,6 +57,100 @@ function queueSSH<T>(fn: () => Promise<T>): Promise<T> {
   sshQueue = next.catch(() => {})
   return next
 }
+
+// ─── Terminal Session Registry ───────────────────────────────────────────────
+type TerminalSession =
+  | { type: 'local'; pty: IPty }
+  | { type: 'remote'; stream: ClientChannel }
+
+const terminalSessions = new Map<string, TerminalSession>()
+
+function destroyAllTerminals() {
+  for (const [id, session] of terminalSessions.entries()) {
+    try {
+      if (session.type === 'local') session.pty.kill()
+      else session.stream.end()
+    } catch {}
+    terminalSessions.delete(id)
+  }
+}
+
+ipcMain.on('create-terminal', (event, { terminalId, env, cols, rows, cwd }: {
+  terminalId: string
+  env: 'local' | 'remote'
+  cols: number
+  rows: number
+  cwd?: string
+}) => {
+  if (env === 'local') {
+    const shell = process.env.SHELL ||
+      (platform() === 'win32' ? 'cmd.exe' : platform() === 'darwin' ? '/bin/zsh' : '/bin/bash')
+    const ptyProcess = pty.spawn(shell, [], {
+      name: 'xterm-256color',
+      cols: cols || 80,
+      rows: rows || 24,
+      cwd: cwd || homedir(),
+      env: process.env as Record<string, string>,
+    })
+    terminalSessions.set(terminalId, { type: 'local', pty: ptyProcess })
+    ptyProcess.onData((data) => {
+      mainWindow?.webContents.send(`terminal-data:${terminalId}`, data)
+    })
+    ptyProcess.onExit(() => {
+      mainWindow?.webContents.send(`terminal-exit:${terminalId}`)
+      terminalSessions.delete(terminalId)
+    })
+  } else {
+    // Remote SSH shell
+    if (!sshClient) {
+      event.sender.send(`terminal-exit:${terminalId}`)
+      return
+    }
+    sshClient.shell({ term: 'xterm-256color', cols: cols || 80, rows: rows || 24 }, (err, stream) => {
+      if (err) {
+        event.sender.send(`terminal-exit:${terminalId}`)
+        return
+      }
+      terminalSessions.set(terminalId, { type: 'remote', stream })
+      stream.on('data', (data: Buffer) => {
+        mainWindow?.webContents.send(`terminal-data:${terminalId}`, data.toString())
+      })
+      stream.stderr.on('data', (data: Buffer) => {
+        mainWindow?.webContents.send(`terminal-data:${terminalId}`, data.toString())
+      })
+      stream.on('close', () => {
+        mainWindow?.webContents.send(`terminal-exit:${terminalId}`)
+        terminalSessions.delete(terminalId)
+      })
+    })
+  }
+})
+
+ipcMain.on('write-terminal', (_event, { terminalId, data }: { terminalId: string; data: string }) => {
+  const session = terminalSessions.get(terminalId)
+  if (!session) return
+  if (session.type === 'local') session.pty.write(data)
+  else session.stream.write(data)
+})
+
+ipcMain.on('resize-terminal', (_event, { terminalId, cols, rows }: { terminalId: string; cols: number; rows: number }) => {
+  const session = terminalSessions.get(terminalId)
+  if (!session) return
+  if (session.type === 'local') session.pty.resize(cols, rows)
+  else {
+    try { (session.stream as any).setWindow(rows, cols, 0, 0) } catch {}
+  }
+})
+
+ipcMain.on('close-terminal', (_event, { terminalId }: { terminalId: string }) => {
+  const session = terminalSessions.get(terminalId)
+  if (!session) return
+  try {
+    if (session.type === 'local') session.pty.kill()
+    else session.stream.end()
+  } catch {}
+  terminalSessions.delete(terminalId)
+})
 
 const API_PORT = process.env.ZX_PORT || '8000'
 const API_TOKEN = randomBytes(32).toString('hex')
@@ -699,6 +795,7 @@ function createWindow() {
 }
 
 app.on('window-all-closed', () => {
+  destroyAllTerminals()
   if (backendProcess) backendProcess.kill()
   if (sshClient) sshClient.end()
   if (tunnelServer) tunnelServer.close()
@@ -706,6 +803,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('quit', () => {
+  destroyAllTerminals()
   if (backendProcess) backendProcess.kill()
   if (sshClient) sshClient.end()
   if (tunnelServer) tunnelServer.close()

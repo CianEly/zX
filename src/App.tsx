@@ -5,6 +5,7 @@ import { ParameterGrid } from './views/ParameterGrid'
 import { ConnectionViz } from './views/ConnectionViz'
 import { HookEditor } from './views/HookEditor'
 import { ProjectManager } from './views/ProjectManager'
+import { TerminalPanel } from './views/TerminalPanel'
 import React, { Suspense, lazy } from 'react'
 
 const PlotView = lazy(() => import('./views/PlotView').then(m => ({ default: m.PlotView })))
@@ -25,11 +26,7 @@ export default function App() {
   const [csvData, setCsvData] = useState<any | null>(null)
   const processedUntilRef = useRef(0)
 
-  useEffect(() => {
-    window.ipcRenderer.invoke('ping').then((res) => {
-      console.log('[RENDERER IPC RESULT]', res)
-    })
-  }, [])
+
   // 1. Fetch config and check health (Stable Polling)
   useEffect(() => {
     const fetchAndCheck = async () => {
@@ -197,7 +194,7 @@ export default function App() {
         </Suspense>
       )}
       {activeTab === 'hooks' && <HookEditor projectPath={currentProject.path} env={currentProject.env} connectionStatus={connectionStatus} />}
-      {activeTab === 'terminal' && <div className="content"><div style={{ color: 'var(--text3)' }}>Terminal panel placeholder</div></div>}
+      {activeTab === 'terminal' && <TerminalPanel env={currentProject.env} projectPath={currentProject.path} />}
       {activeTab === 'files' && <div className="content"><div style={{ color: 'var(--text3)' }}>Files panel placeholder</div></div>}
     </Layout>
   )
