@@ -1,73 +1,55 @@
-# React + TypeScript + Vite
+# zX: Parametric Exploration Engine
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**zX** is a desktop application designed to orchestrate and execute automated parametric exploration and multi-objective optimization loops. It provides a robust, visual interface to connect to local or remote compute environments, manage optimization parameters, and interactively explore results.
 
-Currently, two official plugins are available:
+## 🚀 The Vision
+Parametric modeling and simulation tools (like EnergyPlus, OpenFOAM, etc.) are often incredibly tedious to run sequentially. Setting up an optimization loop usually requires writing messy, one-off bash or Python scripts. 
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+zX solves this by acting as a **language-agnostic, decoupled orchestration engine**. You provide the simulation logic via simple Python hooks, and zX handles the heavy lifting: state management, execution looping, remote SSH tunneling, progress tracking, and live visualization.
 
-## React Compiler
+## 🏗 Architecture
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+zX uses a dual-backend architecture to bridge the gap between a sleek desktop UI and heavy-duty scientific computing.
 
-## Expanding the ESLint configuration
+- **Frontend (UI)**: Built with **React, TypeScript, and Vite**, running inside **Electron**. This provides the desktop container and handles all user interactions, file management, and Plotly-based data visualization.
+- **Node Layer (Electron Main Process)**: Handles local file I/O, spawns the local Python backend, and manages SSH tunnels to connect the UI to remote High-Performance Computing (HPC) clusters.
+- **Python Backend**: A **FastAPI** server that runs the actual optimization loop. It uses `pandas` for data state and `pymoo` for executing genetic algorithms like NSGA-II.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## ⚙️ How It Works (The Hook System)
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+zX knows nothing about your specific simulation. Instead, it relies on a set of user-defined Python scripts (Hooks) stored in your project's `hooks/` directory. 
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+The backend iterates over your parameter database and calls your hooks at specific lifecycle stages:
+1. `initialize.py`: Generates the initial population of parameters.
+2. `preprocess.py`: Reads the parameters and writes input files for your simulation.
+3. `launch.py`: Triggers your external simulation CLI via a subprocess.
+4. `extract.py`: Parses your simulation's output files and returns the objective scores.
+5. `explore.py`: Reads the completed database, runs an optimization algorithm, and generates the next iteration of parameters.
+6. `plot.py`: Generates custom Plotly JSON schemas for the UI to render.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## 💻 Running the App Locally
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+To develop or run the application locally on your machine:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+1. **Install Node dependencies:**
+   ```bash
+   npm install
+   ```
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+2. **Start the development server:**
+   ```bash
+   npm run dev
+   ```
+   *Note: This command concurrently starts the Vite dev server, compiles the Electron main process, and spawns the Python FastAPI backend in the background.*
+
+## 📂 Project Structure
+
+```text
+zX/
+├── src/                  # React Frontend (UI Components, Views, CSS)
+├── electron/             # Electron Main Process (IPC, SSH, Spawning)
+├── backend/              # Python FastAPI Server (The Runner Engine)
+│   ├── zx/               # Core Python modules
+│   └── pyproject.toml    # Python dependencies
+└── package.json          # Node dependencies and scripts
 ```
