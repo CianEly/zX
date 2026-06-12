@@ -63,7 +63,7 @@ export default function App() {
     }
 
     fetchAndCheck()
-    const interval = setInterval(fetchAndCheck, 5000) // Slowed to 5s
+    const interval = setInterval(fetchAndCheck, 30000) // Slowed to 30s
     return () => clearInterval(interval)
   }, []) // Empty dependency array means it only starts once
 
