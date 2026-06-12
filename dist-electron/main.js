@@ -627,6 +627,7 @@ var mainWindow = null;
 var backendProcess = null;
 var sshClient = null;
 var tunnelServer = null;
+var sftpSession = null;
 var sshQueue = Promise.resolve();
 function queueSSH(fn) {
 	const next = sshQueue.then(() => fn()).catch(() => fn());
@@ -745,6 +746,7 @@ ipcMain.handle("disconnect", async () => {
 		tunnelServer.close();
 		tunnelServer = null;
 	}
+	sftpSession = null;
 	currentTunnelPort = null;
 	return { success: true };
 });
@@ -993,7 +995,7 @@ ipcMain.handle("list-data", async (event, { projectPath, env }) => {
 		if (env === "local") return (await readdir(join(resolvePath(projectPath), "data"))).filter((f) => f.endsWith(".csv"));
 		else {
 			if (!sshClient) return [];
-			return new Promise((resolve) => {
+			return queueSSH(() => new Promise((resolve) => {
 				sshClient.exec(`ls ${projectPath}/data/*.csv`, (err, stream) => {
 					if (err) return resolve([]);
 					let data = "";
@@ -1002,7 +1004,7 @@ ipcMain.handle("list-data", async (event, { projectPath, env }) => {
 						resolve(data.trim().split("\n").map((f) => f.split("/").pop()).filter((f) => f));
 					});
 				});
-			});
+			}));
 		}
 	} catch {
 		return [];
@@ -1150,6 +1152,9 @@ ipcMain.handle("connect-ssh", async (event, { host: hostAlias, sshPort, tunnelPo
 	return new Promise((resolve, reject) => {
 		sshClient.on("ready", () => {
 			console.log(`SSH Client Ready: ${sshUser}@${config.host}`);
+			sshClient.sftp((err, sftp) => {
+				if (!err) sftpSession = sftp;
+			});
 			event.sender.send("connection-progress", {
 				step: 1,
 				status: "done",
@@ -1286,33 +1291,27 @@ ipcMain.handle("fs-list", async (_event, { projectPath, env, targetPath }) => {
 			error: e.message
 		};
 	}
-	else return new Promise((resolve) => {
-		if (!sshClient) return resolve({
+	else return queueSSH(() => new Promise((resolve) => {
+		if (!sshClient || !sftpSession) return resolve({
 			success: false,
 			error: "Not connected"
 		});
-		sshClient.sftp((err, sftp) => {
+		sftpSession.readdir(dirPath, (err, list) => {
 			if (err) return resolve({
 				success: false,
 				error: err.message
 			});
-			sftp.readdir(dirPath, (err, list) => {
-				if (err) return resolve({
-					success: false,
-					error: err.message
-				});
-				resolve({
-					success: true,
-					files: list.map((item) => ({
-						name: item.filename,
-						path: `${dirPath}/${item.filename}`.replace(/\/\//g, "/"),
-						isDirectory: item.attrs.isDirectory(),
-						size: item.attrs.size
-					})).sort((a, b) => a.isDirectory === b.isDirectory ? a.name.localeCompare(b.name) : a.isDirectory ? -1 : 1)
-				});
+			resolve({
+				success: true,
+				files: list.map((item) => ({
+					name: item.filename,
+					path: `${dirPath}/${item.filename}`.replace(/\/\//g, "/"),
+					isDirectory: item.attrs.isDirectory(),
+					size: item.attrs.size
+				})).sort((a, b) => a.isDirectory === b.isDirectory ? a.name.localeCompare(b.name) : a.isDirectory ? -1 : 1)
 			});
 		});
-	});
+	}));
 });
 ipcMain.handle("fs-read", async (_event, { path, env }) => {
 	if (env === "local") try {
@@ -1326,28 +1325,22 @@ ipcMain.handle("fs-read", async (_event, { path, env }) => {
 			error: e.message
 		};
 	}
-	else return new Promise((resolve) => {
-		if (!sshClient) return resolve({
+	else return queueSSH(() => new Promise((resolve) => {
+		if (!sshClient || !sftpSession) return resolve({
 			success: false,
 			error: "Not connected"
 		});
-		sshClient.sftp((err, sftp) => {
+		sftpSession.readFile(path, "utf-8", (err, content) => {
 			if (err) return resolve({
 				success: false,
 				error: err.message
 			});
-			sftp.readFile(path, "utf-8", (err, content) => {
-				if (err) return resolve({
-					success: false,
-					error: err.message
-				});
-				resolve({
-					success: true,
-					content: content.toString("utf-8")
-				});
+			resolve({
+				success: true,
+				content: content.toString("utf-8")
 			});
 		});
-	});
+	}));
 });
 ipcMain.handle("fs-delete", async (_event, { path, env }) => {
 	if (env === "local") try {
@@ -1362,7 +1355,7 @@ ipcMain.handle("fs-delete", async (_event, { path, env }) => {
 			error: e.message
 		};
 	}
-	else return new Promise((resolve) => {
+	else return queueSSH(() => new Promise((resolve) => {
 		if (!sshClient) return resolve({
 			success: false,
 			error: "Not connected"
@@ -1380,7 +1373,7 @@ ipcMain.handle("fs-delete", async (_event, { path, env }) => {
 				});
 			}).on("data", () => {}).stderr.on("data", () => {});
 		});
-	});
+	}));
 });
 ipcMain.handle("fs-rename", async (_event, { oldPath, newPath, env }) => {
 	if (env === "local") try {
@@ -1392,25 +1385,19 @@ ipcMain.handle("fs-rename", async (_event, { oldPath, newPath, env }) => {
 			error: e.message
 		};
 	}
-	else return new Promise((resolve) => {
-		if (!sshClient) return resolve({
+	else return queueSSH(() => new Promise((resolve) => {
+		if (!sshClient || !sftpSession) return resolve({
 			success: false,
 			error: "Not connected"
 		});
-		sshClient.sftp((err, sftp) => {
+		sftpSession.rename(oldPath, newPath, (err) => {
 			if (err) return resolve({
 				success: false,
 				error: err.message
 			});
-			sftp.rename(oldPath, newPath, (err) => {
-				if (err) return resolve({
-					success: false,
-					error: err.message
-				});
-				resolve({ success: true });
-			});
+			resolve({ success: true });
 		});
-	});
+	}));
 });
 function createWindow() {
 	mainWindow = new BrowserWindow({
