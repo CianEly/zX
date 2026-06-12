@@ -11,6 +11,7 @@ def plot(table: pd.DataFrame, state: dict) -> dict:
         x="f1", 
         y="f2", 
         color="_zx_iteration",
+        hover_data=["_zx_row_id"],
         title="ZDT1 Pareto Front Evolution",
         labels={"f1": "Objective 1 (f1)", "f2": "Objective 2 (f2)"},
         color_continuous_scale="Viridis"

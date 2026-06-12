@@ -12,9 +12,10 @@ interface PlotViewProps {
   env: 'local' | 'remote'
   dbFilename?: string
   messageSeq?: number
+  onRowClick?: (rowId: number) => void
 }
 
-export function PlotView({ projectPath, env, dbFilename = 'zx_database.csv', messageSeq }: PlotViewProps) {
+export function PlotView({ projectPath, env, dbFilename = 'zx_database.csv', messageSeq, onRowClick }: PlotViewProps) {
   const [figures, setFigures] = useState<Record<string, any>>({})
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -112,6 +113,14 @@ export function PlotView({ projectPath, env, dbFilename = 'zx_database.csv', mes
                       useResizeHandler={true}
                       style={{ width: '100%', height: '100%' }}
                       config={{ responsive: true, displayModeBar: false }}
+                      onClick={(data) => {
+                        if (data.points && data.points.length > 0) {
+                          const pt = data.points[0]
+                          if (pt.customdata && pt.customdata.length > 0 && onRowClick) {
+                            onRowClick(parseInt(pt.customdata[0]))
+                          }
+                        }
+                      }}
                     />
                   </div>
                 </div>

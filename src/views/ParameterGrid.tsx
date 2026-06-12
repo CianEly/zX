@@ -11,9 +11,11 @@ interface ParameterGridProps {
   setCsvData: (data: CsvData | null) => void;
   selectedFile: string | null;
   setSelectedFile: (file: string | null) => void;
+  highlightedRowId?: number | null;
+  setHighlightedRowId?: (id: number | null) => void;
 }
 
-export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedFile, setSelectedFile }: ParameterGridProps) {
+export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedFile, setSelectedFile, highlightedRowId, setHighlightedRowId }: ParameterGridProps) {
   const [dataFiles, setDataFiles] = useState<string[]>([])
   const [isDirty, setIsDirty] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -75,6 +77,16 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
     }
     loadData()
   }, [selectedFile, projectPath, env])
+
+  // Scroll to and highlight row when selected from Plot
+  useEffect(() => {
+    if (highlightedRowId !== null && highlightedRowId !== undefined) {
+      const rowEl = document.getElementById(`row-${highlightedRowId}`)
+      if (rowEl) {
+        rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }
+  }, [highlightedRowId, filterText])
 
   // Handle real-time updates now handled in App.tsx
 
@@ -405,8 +417,9 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
                   {filteredRows.map((row, i) => {
                     const rid = parseInt(row._zx_row_id || String(i));
                     const status = row._zx_status || 'pending';
+                    const isHighlighted = highlightedRowId === rid;
                     return (
-                      <tr key={rid} className={status}>
+                      <tr key={rid} id={`row-${rid}`} className={`${status} ${isHighlighted ? 'persistent-highlight' : ''}`} onClick={() => setHighlightedRowId && setHighlightedRowId(rid)}>
                         <td style={{ textAlign: 'center' }}>
                           <input 
                             type="checkbox" 
@@ -488,6 +501,11 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
         .cell-input:focus {
           background: rgba(var(--accent-rgb), 0.1);
           box-shadow: inset 0 0 0 1px var(--accent);
+        }
+
+        .persistent-highlight td {
+          background-color: rgba(99, 102, 241, 0.25) !important;
+          box-shadow: inset 0 1px 0 rgba(99, 102, 241, 0.5), inset 0 -1px 0 rgba(99, 102, 241, 0.5);
         }
 
         .spin {

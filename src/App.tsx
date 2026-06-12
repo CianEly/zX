@@ -26,6 +26,7 @@ export default function App() {
   // Centralized CSV Data State
   const [csvData, setCsvData] = useState<any | null>(null)
   const processedUntilRef = useRef(0)
+  const [highlightedRowId, setHighlightedRowId] = useState<number | null>(null)
 
 
   // 1. Fetch config and check health (Stable Polling)
@@ -202,11 +203,22 @@ export default function App() {
           setCsvData={setCsvData}
           selectedFile={selectedFile}
           setSelectedFile={setSelectedFile}
+          highlightedRowId={highlightedRowId}
+          setHighlightedRowId={setHighlightedRowId}
         />
       )}
       {activeTab === 'visualization' && (
         <Suspense fallback={<div className="content"><div className="spin" style={{ margin: 'auto' }}><RefreshCw /></div></div>}>
-          <PlotView projectPath={currentProject.path} env={currentProject.env} dbFilename={selectedFile || undefined} messageSeq={messageSeq} />
+          <PlotView 
+            projectPath={currentProject.path} 
+            env={currentProject.env} 
+            dbFilename={selectedFile || undefined} 
+            messageSeq={messageSeq} 
+            onRowClick={(rowId) => {
+              setHighlightedRowId(rowId)
+              setActiveTab('parameters')
+            }}
+          />
         </Suspense>
       )}
       {activeTab === 'hooks' && <HookEditor projectPath={currentProject.path} env={currentProject.env} connectionStatus={connectionStatus} />}
