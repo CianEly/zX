@@ -33,30 +33,12 @@ export function Topbar({ title, breadcrumb, compact, onImport }: TopbarProps) {
               <FileUp size={12} strokeWidth={1.4} />
               Upload
             </button>
-            <div className="sep"></div>
-            <button className="btn btn-green">
-              <Play size={12} strokeWidth={1.5} />
-              Validate on target
-            </button>
-            <button className="btn btn-accent">
-              <Play size={12} fill="white" />
-              Save & apply
-            </button>
           </>
         ) : (
           <>
             <button className="btn btn-ghost" onClick={onImport}>
               <FileUp size={13} strokeWidth={1.5} />
               Import CSV
-            </button>
-            <button className="btn">Dry Run</button>
-            <button className="btn btn-danger">
-              <Square size={12} fill="currentColor" />
-              Stop
-            </button>
-            <button className="btn btn-accent">
-              <Play size={12} fill="white" />
-              Run Selected
             </button>
           </>
         )}

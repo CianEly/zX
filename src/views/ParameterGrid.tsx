@@ -24,10 +24,8 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   
   // Execution State
-  const [selectedRowIds, setSelectedRowIds] = useState<Set<number>>(new Set())
   const [isExecuting, setIsExecuting] = useState(false)
   const [dryRun, setDryRun] = useState(false)
-  const [forceReRun, setForceReRun] = useState(false)
 
   // Helper to render icons safely
   const Icon = ({ name, size = 16, className = "", style = {} }: { name: string, size?: number, className?: string, style?: any }) => {
@@ -109,11 +107,8 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
 
   const handleExecute = async () => {
     if (!selectedFile) return
-    if (selectedRowIds.size === 0 && !window.confirm("No rows selected. Do you want to run the Initialization Hook to generate rows?")) return
-    setIsExecuting(true)
     try {
       const config = await window.ipcRenderer.getApiConfig()
-      const rowIds = Array.from(selectedRowIds)
       
       const res = await fetch(`http://127.0.0.1:${config.port}/execute`, {
         method: 'POST',
@@ -124,7 +119,7 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
         body: JSON.stringify({
           project_path: projectPath,
           db_filename: selectedFile,
-          row_ids: rowIds,
+          row_ids: [],
           dry_run: dryRun
         })
       })
@@ -135,36 +130,6 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
       }
     } catch (err) {
       alert('Error starting execution: ' + err)
-    } finally {
-      setIsExecuting(false)
-    }
-  }
-
-  const handleStop = async () => {
-    try {
-      const config = await window.ipcRenderer.getApiConfig()
-      await fetch(`http://127.0.0.1:${config.port}/stop?project_path=${encodeURIComponent(projectPath)}&db_filename=${encodeURIComponent(selectedFile || 'zx_database.csv')}`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${config.token}` }
-      })
-    } catch (err) {
-      console.error('Error stopping:', err)
-    }
-  }
-
-  const toggleRowSelection = (id: number) => {
-    const next = new Set(selectedRowIds)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    setSelectedRowIds(next)
-  }
-
-  const toggleSelectAll = () => {
-    if (selectedRowIds.size === filteredRows.length) {
-      setSelectedRowIds(new Set())
-    } else {
-      const allIds = filteredRows.map(r => parseInt(r._zx_row_id || '0'))
-      setSelectedRowIds(new Set(allIds))
     }
   }
 
@@ -358,26 +323,12 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
               style={{ padding: '6px 16px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}
             >
               <Icon name="Play" size={14} />
-              {selectedRowIds.size > 0 ? `Run Exploration (${selectedRowIds.size})` : `Initialize Exploration`}
+              Run Exploration Engine
             </button>
-            <button 
-              onClick={handleStop}
-              className="btn btn-ghost"
-              style={{ padding: '6px 16px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, color: '#EF4444' }}
-            >
-              <Icon name="Square" size={14} />
-              Stop
-            </button>
-
             <div style={{ height: 20, width: 1, background: 'var(--border)', margin: '0 8px' }} />
-
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }}>
               <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} />
-              Dry Run
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={forceReRun} onChange={e => setForceReRun(e.target.checked)} />
-              Force Re-run
+              Dry Run Simulation
             </label>
           </div>
 
@@ -403,9 +354,6 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
               <table className="param-table">
                 <thead>
                   <tr>
-                    <th style={{ width: 40, textAlign: 'center' }}>
-                      <input type="checkbox" onChange={toggleSelectAll} checked={selectedRowIds.size === filteredRows.length && filteredRows.length > 0} />
-                    </th>
                     <th style={{ width: 40, textAlign: 'center' }}>#</th>
                     <th style={{ width: 80 }}>Status</th>
                     {csvData.headers.map(h => (
@@ -420,13 +368,6 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
                     const isHighlighted = highlightedRowId === rid;
                     return (
                       <tr key={rid} id={`row-${rid}`} className={`${status} ${isHighlighted ? 'persistent-highlight' : ''}`} onClick={() => setHighlightedRowId && setHighlightedRowId(rid)}>
-                        <td style={{ textAlign: 'center' }}>
-                          <input 
-                            type="checkbox" 
-                            checked={selectedRowIds.has(rid)} 
-                            onChange={() => toggleRowSelection(rid)} 
-                          />
-                        </td>
                         <td style={{ color: 'var(--text3)', fontSize: 11, textAlign: 'center', background: '#1A1B20' }}>{rid}</td>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>

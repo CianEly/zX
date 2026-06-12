@@ -222,7 +222,9 @@ export default function App() {
         </Suspense>
       )}
       {activeTab === 'hooks' && <HookEditor projectPath={currentProject.path} env={currentProject.env} connectionStatus={connectionStatus} />}
-      {activeTab === 'terminal' && <TerminalPanel env={currentProject.env} projectPath={currentProject.path} />}
+      <div style={{ display: activeTab === 'terminal' ? 'block' : 'none', height: '100%' }}>
+        <TerminalPanel env={currentProject.env} projectPath={currentProject.path} />
+      </div>
       {activeTab === 'files' && <FileExplorer env={currentProject.env} projectPath={currentProject.path} />}
     </Layout>
   )
