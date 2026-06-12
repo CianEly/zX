@@ -19,6 +19,8 @@ class CustomZDT1(Problem):
 def explore(table: pd.DataFrame, state: dict) -> list[dict]:
     max_iters = state.get("max_iterations", 15)
     
+    1/0
+
     if max_iters <= 0:
         return [] # Terminate
         

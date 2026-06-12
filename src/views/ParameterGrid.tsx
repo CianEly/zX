@@ -13,15 +13,18 @@ interface ParameterGridProps {
   setSelectedFile: (file: string | null) => void;
   highlightedRowId?: number | null;
   setHighlightedRowId?: (id: number | null) => void;
+  globalError?: {stage: string, error: string} | null;
+  clearGlobalError?: () => void;
 }
 
-export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedFile, setSelectedFile, highlightedRowId, setHighlightedRowId }: ParameterGridProps) {
+export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedFile, setSelectedFile, highlightedRowId, setHighlightedRowId, globalError, clearGlobalError }: ParameterGridProps) {
   const [dataFiles, setDataFiles] = useState<string[]>([])
   const [isDirty, setIsDirty] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [filterText, setFilterText] = useState('')
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
+  const [selectedErrorTrace, setSelectedErrorTrace] = useState<string | null>(null)
   
   // Execution State
   const [isExecuting, setIsExecuting] = useState(false)
@@ -351,7 +354,26 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
                 </div>
               </div>
             ) : csvData && csvData.headers.length > 0 ? (
-              <table className="param-table">
+              <>
+                {globalError && (
+                  <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', padding: 16, margin: 16, borderRadius: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#EF4444', fontWeight: 600 }}>
+                        <Icon name="AlertTriangle" size={16} />
+                        Global Error in {globalError.stage} Hook
+                      </div>
+                      {clearGlobalError && (
+                        <button onClick={clearGlobalError} style={{ background: 'transparent', border: 'none', color: '#EF4444', cursor: 'pointer' }}>
+                          <Icon name="X" size={16} />
+                        </button>
+                      )}
+                    </div>
+                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: 'var(--text2)', fontSize: 11, fontFamily: 'var(--font-mono)', overflowX: 'auto' }}>
+                      {globalError.error}
+                    </pre>
+                  </div>
+                )}
+                <table className="param-table">
                 <thead>
                   <tr>
                     <th style={{ width: 40, textAlign: 'center' }}>#</th>
@@ -373,7 +395,11 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
                             {status === 'running' && <Icon name="RotateCw" size={12} className="spin" />}
                             {status === 'completed' && <Icon name="CheckCircle2" size={12} style={{ color: '#10B981' }} />}
-                            {status === 'failed' && <Icon name="AlertCircle" size={12} style={{ color: '#EF4444' }} />}
+                            {(status === 'failed' || status === 'error') && (
+                              <button onClick={(e) => { e.stopPropagation(); setSelectedErrorTrace(row._zx_error || 'No error details provided.'); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+                                <Icon name="AlertCircle" size={12} style={{ color: '#EF4444' }} />
+                              </button>
+                            )}
                             {status === 'pending' && <Icon name="Circle" size={12} style={{ opacity: 0.3 }} />}
                             <span style={{ textTransform: 'capitalize' }}>{row._zx_hook_stage || status}</span>
                           </div>
@@ -392,6 +418,7 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
                   })}
                 </tbody>
               </table>
+            </>
             ) : csvData ? (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>
                 Selected file is empty or missing headers.
@@ -400,6 +427,25 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
           </div>
         </div>
       </div>
+
+      {selectedErrorTrace && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+          <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 20, width: '80%', maxWidth: 800, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h3 style={{ margin: 0, fontSize: 14, color: '#EF4444', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Icon name="AlertCircle" size={16} />
+                Row Execution Failed
+              </h3>
+              <button onClick={() => setSelectedErrorTrace(null)} style={{ background: 'transparent', border: 'none', color: 'var(--text3)', cursor: 'pointer' }}>
+                <Icon name="X" size={16} />
+              </button>
+            </div>
+            <pre style={{ flex: 1, overflow: 'auto', margin: 0, padding: 12, background: 'var(--bg)', borderRadius: 4, color: 'var(--text2)', fontSize: 11, fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap' }}>
+              {selectedErrorTrace}
+            </pre>
+          </div>
+        </div>
+      )}
 
       <style>{`
         .param-table {

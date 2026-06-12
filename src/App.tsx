@@ -25,6 +25,7 @@ export default function App() {
 
   // Centralized CSV Data State
   const [csvData, setCsvData] = useState<any | null>(null)
+  const [globalError, setGlobalError] = useState<{stage: string, error: string} | null>(null)
   const processedUntilRef = useRef(0)
   const [highlightedRowId, setHighlightedRowId] = useState<number | null>(null)
 
@@ -145,6 +146,11 @@ export default function App() {
           continue
         }
 
+        if (update.row_id === -1 && update.status === 'exploration_error') {
+           setGlobalError({ stage: update.extra_data?.stage || 'unknown', error: update.error })
+           continue
+        }
+
         const idx = newRows.findIndex(r => parseInt(r._zx_row_id || '-1') === update.row_id);
         if (idx !== -1) {
           const merged = {
@@ -205,6 +211,8 @@ export default function App() {
           setSelectedFile={setSelectedFile}
           highlightedRowId={highlightedRowId}
           setHighlightedRowId={setHighlightedRowId}
+          globalError={globalError}
+          clearGlobalError={() => setGlobalError(null)}
         />
       )}
       {activeTab === 'visualization' && (

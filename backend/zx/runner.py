@@ -180,7 +180,13 @@ class ExecutionRunner:
             if init_hook and not dry_run:
                 print(f"Running initialization hook...")
                 df = self._read_db()
-                result = await asyncio.to_thread(init_hook, df, self.state)
+                try:
+                    result = await asyncio.to_thread(init_hook, df, self.state)
+                except Exception as e:
+                    trace = traceback.format_exc()
+                    print(f"Initialization hook failed: {trace}")
+                    await self._emit_update(-1, "exploration_error", error=trace, extra_data={"stage": "initialize"})
+                    return
                 
                 # Result can be (new_rows, new_state) or just new_rows
                 if isinstance(result, tuple):
@@ -219,7 +225,13 @@ class ExecutionRunner:
 
                 print(f"--- Iteration {current_iteration} complete. Running exploration... ---")
                 df = self._read_db()
-                new_rows = await asyncio.to_thread(explore_hook, df, self.state)
+                try:
+                    new_rows = await asyncio.to_thread(explore_hook, df, self.state)
+                except Exception as e:
+                    trace = traceback.format_exc()
+                    print(f"Exploration hook failed: {trace}")
+                    await self._emit_update(-1, "exploration_error", error=trace, extra_data={"stage": "explore", "iteration": current_iteration})
+                    break
 
                 if not new_rows:
                     print("Exploration finished: no more rows generated.")
@@ -320,12 +332,12 @@ class ExecutionRunner:
             
             # Broadcast error and save to CSV
             error_updates = {
-                "_zx_status": "error",
-                "_zx_error": err_msg,
+                "_zx_status": "failed",
+                "_zx_error": trace,
                 "_zx_hook_stage": stage_name if 'stage_name' in locals() else "unknown",
                 "_zx_completed_at": datetime.now().isoformat()
             }
-            await self._emit_update(row_id, "error", error=err_msg, extra_data=error_updates)
+            await self._emit_update(row_id, "failed", error=err_msg, extra_data=error_updates)
             self._update_csv(row_id, error_updates)
 
     def stop(self):
