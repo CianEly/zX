@@ -2,7 +2,8 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import type { BrowserWindow as BrowserWindowType } from 'electron'
 import { join, dirname, resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, exec, type ChildProcess } from 'node:child_process'
+import { promisify } from 'node:util'
 import { randomBytes } from 'node:crypto'
 import { readFile, access, writeFile, mkdir, readdir, rm, rename, stat } from 'node:fs/promises'
 import { hookTemplates } from './templates'
@@ -13,6 +14,8 @@ import SSHConfig from 'ssh-config'
 import { Client, type ClientChannel } from 'ssh2'
 import * as pty from 'node-pty'
 import type { IPty } from 'node-pty'
+
+const execAsync = promisify(exec)
 
 let currentTunnelPort: number | null = null
 let connectionStateCache: Record<number, { status: string; sub?: string }> = {}
@@ -349,6 +352,55 @@ ipcMain.handle('remove-recent-project', async (event, path: string) => {
   } catch {
     return []
   }
+})
+
+ipcMain.handle('upload-project', async (event, { localPath, remotePath }) => {
+  return queueSSH(() => new Promise(async (resolve) => {
+    try {
+      if (!sshClient) return resolve({ success: false, error: 'Not connected' })
+      
+      const tarballName = `zx_upload_${Date.now()}.tar.gz`
+      const localTarPath = join(app.getPath('temp'), tarballName)
+      
+      broadcastLog(`[System]: Compressing local project ${localPath}...`)
+      await execAsync(`tar -czf "${localTarPath}" -C "${localPath}" .`)
+
+      let safeRemotePath = remotePath
+      if (safeRemotePath.startsWith('~/')) safeRemotePath = safeRemotePath.slice(2)
+      
+      broadcastLog(`[System]: Creating remote project directory...`)
+      await new Promise<void>((res, rej) => sshClient!.exec(`mkdir -p "${remotePath.replace(/"/g, '\\"')}"`, (err, stream) => {
+         if(err) return rej(err)
+         stream.on('close', (code: number) => {
+           if (code === 0) res()
+           else rej(new Error(`mkdir failed with code ${code}`))
+         }).on('data', () => {}).stderr.on('data', () => {})
+      }))
+
+      broadcastLog(`[System]: Uploading project tarball via SFTP...`)
+      const remoteTarPath = `${safeRemotePath}/${tarballName}`
+      await uploadFile(sshClient!, localTarPath, remoteTarPath)
+
+      broadcastLog(`[System]: Extracting tarball on remote server...`)
+      const extractCmd = `cd "${remotePath.replace(/"/g, '\\"')}" && tar -xzf "${tarballName}" && rm "${tarballName}"`
+      await new Promise<void>((res, rej) => sshClient!.exec(extractCmd, (err, stream) => {
+         if(err) return rej(err)
+         stream.on('close', (code: number) => {
+           if (code === 0) res()
+           else rej(new Error(`Extraction failed with code ${code}`))
+         }).on('data', () => {}).stderr.on('data', () => {})
+      }))
+
+      broadcastLog(`[System]: Cleaning up local temporary files...`)
+      await rm(localTarPath, { force: true })
+
+      broadcastLog(`[System]: Project upload complete!`)
+      resolve({ success: true })
+    } catch (e: any) {
+      broadcastLog(`[System Error]: Project upload failed: ${e.message}`)
+      resolve({ success: false, error: e.message })
+    }
+  }))
 })
 
 ipcMain.handle('init-project', async (event, { path: rawPath, env }: { path: string, env: 'local' | 'remote' }) => {

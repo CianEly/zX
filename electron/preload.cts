@@ -21,6 +21,7 @@ try {
     addRecentProject: (params: { path: string; env: 'local' | 'remote' }) => ipcRenderer.invoke('add-recent-project', params),
     removeRecentProject: (path: string) => ipcRenderer.invoke('remove-recent-project', path),
     initProject: (params: { path: string; env: 'local' | 'remote' }) => ipcRenderer.invoke('init-project', params),
+    uploadProject: (params: { localPath: string; remotePath: string }) => ipcRenderer.invoke('upload-project', params),
     listHooks: (projectPath: string, env: 'local' | 'remote') => ipcRenderer.invoke('list-hooks', { projectPath, env }),
     readHook: (projectPath: string, filename: string, env: 'local' | 'remote') => ipcRenderer.invoke('read-hook', { projectPath, filename, env }),
     writeHook: (projectPath: string, filename: string, content: string, env: 'local' | 'remote') => ipcRenderer.invoke('write-hook', { projectPath, filename, content, env }),

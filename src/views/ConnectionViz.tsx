@@ -17,6 +17,8 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
   const [projectDir, setProjectDir] = useState(projectPath)
   const [isConnecting, setIsConnecting] = useState(false)
   const [steps, setSteps] = useState<Record<number, { status: string; sub?: string }>>({})
+  const [uploadLocal, setUploadLocal] = useState(false)
+  const [localSourcePath, setLocalSourcePath] = useState('')
 
   useEffect(() => {
     setEnv(initialEnv)
@@ -72,8 +74,21 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
           identityFile: identityFile || undefined
         })
         if (res.success) {
-          // Scaffold remote project now that we have a connection
-          await window.ipcRenderer.initProject({ path: projectDir, env: 'remote' })
+          if (uploadLocal && localSourcePath) {
+            setSteps(prev => ({ ...prev, 99: { status: 'running', sub: 'Uploading local project...' } }))
+            const uploadRes = await window.ipcRenderer.uploadProject({
+              localPath: localSourcePath,
+              remotePath: projectDir
+            })
+            if (!uploadRes.success) {
+              setSteps(prev => ({ ...prev, 99: { status: 'error', sub: uploadRes.error } }))
+              throw new Error('Upload failed: ' + uploadRes.error)
+            }
+            setSteps(prev => ({ ...prev, 99: { status: 'done', sub: 'Project uploaded.' } }))
+          } else {
+            // Only scaffold remote project if we are NOT uploading a local project
+            await window.ipcRenderer.initProject({ path: projectDir, env: 'remote' })
+          }
           window.dispatchEvent(new CustomEvent('fs-update'))
         }
       }
@@ -158,6 +173,44 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
                 onChange={(e) => setIdentityFile(e.target.value)}
                 type="text"
               />
+
+              <div style={{ marginTop: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text)' }}>
+                  <input
+                    type="checkbox"
+                    checked={uploadLocal}
+                    onChange={(e) => setUploadLocal(e.target.checked)}
+                  />
+                  Upload a local project to this remote path
+                </label>
+              </div>
+
+              {uploadLocal && (
+                <div style={{ marginTop: 8 }}>
+                  <div className="label">local source folder</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      className="field"
+                      value={localSourcePath}
+                      onChange={(e) => setLocalSourcePath(e.target.value)}
+                      placeholder="/Users/path/to/local/project"
+                      type="text"
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      className="btn"
+                      onClick={async () => {
+                        const sel = await window.ipcRenderer.selectDirectory()
+                        if (!sel.canceled && sel.filePaths[0]) {
+                          setLocalSourcePath(sel.filePaths[0])
+                        }
+                      }}
+                    >
+                      Browse
+                    </button>
+                  </div>
+                </div>
+              )}
             </>
           )}
 
@@ -197,11 +250,17 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
                   <div className={`step-num sn-${getStepStatus(4)}`}>{getStepStatus(4) === 'done' ? '✓' : '4'}</div>
                   <div><div className="step-text"><b>port forward</b></div><div className="step-sub">{getStepSub(4)}</div></div>
                 </div>
+                {uploadLocal && (
+                  <div className="step">
+                    <div className={`step-num sn-${steps[99]?.status || 'wait'}`}>{steps[99]?.status === 'done' ? '✓' : '5'}</div>
+                    <div><div className="step-text"><b>upload project</b></div><div className="step-sub">{steps[99]?.sub || 'waiting...'}</div></div>
+                  </div>
+                )}
               </>
             )}
             <div className="step">
               <div className={`step-num sn-${getStepStatus(5)}`}>
-                {getStepStatus(5) === 'done' ? '✓' : (env === 'remote' ? '5' : '2')}
+                {getStepStatus(5) === 'done' ? '✓' : (env === 'remote' ? (uploadLocal ? '6' : '5') : '2')}
               </div>
               <div><div className="step-text" style={{ color: getStepStatus(5) === 'done' ? 'var(--text1)' : 'var(--text3)' }}>token auth</div><div className="step-sub">{getStepSub(5)}</div></div>
             </div>
