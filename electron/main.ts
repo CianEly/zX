@@ -35,7 +35,7 @@ function resolvePath(p: string) {
 export function updateConnectionProgress(webContents: any, stepId: number, status: string, sub?: string) {
   if (sub) broadcastLog(`[System]: Step ${stepId} - ${status} (${sub})`)
   connectionStateCache[stepId] = { status, sub }
-  webContents.send('connection-progress', { id: stepId, status, sub })
+  webContents.send('connection-progress', { step: stepId, status, sub })
 }
 
 ipcMain.handle('get-connection-state', () => connectionStateCache)
@@ -367,9 +367,10 @@ ipcMain.handle('upload-project', async (event, { localPath, remotePath }) => {
 
       let safeRemotePath = remotePath
       if (safeRemotePath.startsWith('~/')) safeRemotePath = safeRemotePath.slice(2)
+      const bashSafeRemotePath = remotePath.replace(/^~\//, '$HOME/')
       
       broadcastLog(`[System]: Creating remote project directory...`)
-      await new Promise<void>((res, rej) => sshClient!.exec(`mkdir -p "${remotePath.replace(/"/g, '\\"')}"`, (err, stream) => {
+      await new Promise<void>((res, rej) => sshClient!.exec(`mkdir -p "${bashSafeRemotePath.replace(/"/g, '\\"')}"`, (err, stream) => {
          if(err) return rej(err)
          stream.on('close', (code: number) => {
            if (code === 0) res()
@@ -382,7 +383,7 @@ ipcMain.handle('upload-project', async (event, { localPath, remotePath }) => {
       await uploadFile(sshClient!, localTarPath, remoteTarPath)
 
       broadcastLog(`[System]: Extracting tarball on remote server...`)
-      const extractCmd = `cd "${remotePath.replace(/"/g, '\\"')}" && tar -xzf "${tarballName}" && rm "${tarballName}"`
+      const extractCmd = `cd "${bashSafeRemotePath.replace(/"/g, '\\"')}" && tar -xzf "${tarballName}" && rm "${tarballName}"`
       await new Promise<void>((res, rej) => sshClient!.exec(extractCmd, (err, stream) => {
          if(err) return rej(err)
          stream.on('close', (code: number) => {
@@ -739,11 +740,12 @@ ipcMain.handle('connect-ssh', async (event, { host: hostAlias, sshPort, tunnelPo
 })
 
 async function setupRemoteEnvironment(conn: Client, localPort: number, webContents: Electron.WebContents) {
-  const sendProgress = (step: number, status: string, sub?: string) => {
-    updateConnectionProgress(webContents, step, status, sub)
-  }
+  return queueSSH(async () => {
+    const sendProgress = (step: number, status: string, sub?: string) => {
+      updateConnectionProgress(webContents, step, status, sub)
+    }
 
-  try {
+    try {
 
     // 1. Bootstrap uv
     sendProgress(2, 'active', 'installing uv...')
@@ -826,9 +828,10 @@ async function setupRemoteEnvironment(conn: Client, localPort: number, webConten
     }
 
   } catch (err) {
-    sendProgress(0, 'error', (err as Error).message)
-    throw err
-  }
+      sendProgress(0, 'error', (err as Error).message)
+      throw err
+    }
+  })
 }
 
 function executeRemote(conn: Client, cmd: string): Promise<void> {
