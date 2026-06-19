@@ -204,7 +204,27 @@ class ExecutionRunner:
                     df_all = self._read_db().fillna("")
                     added_df = df_all[df_all["_zx_row_id"].isin(added)]
                     added_rows = added_df.to_dict(orient="records")
-                    await self._emit_update(-1, "exploration_new_rows", extra_data={"new_rows": added_rows, "iteration": 0})
+                    if added_rows:
+                        await self._emit_update(-1, "exploration_new_rows", extra_data={"new_rows": added_rows, "iteration": 0})
+                        
+            # If no specific rows were requested and initialize didn't add any,
+            # execute all existing pending rows in the database
+            if not current_row_ids:
+                df = self._read_db()
+                if not df.empty:
+                    needs_save = False
+                    if "_zx_row_id" not in df.columns:
+                        df["_zx_row_id"] = range(len(df))
+                        needs_save = True
+                    if "_zx_status" not in df.columns:
+                        df["_zx_status"] = ""
+                        needs_save = True
+                    
+                    if needs_save:
+                        df.to_csv(self.db_path, index=False)
+                        
+                    pending = df[df["_zx_status"] != "completed"]["_zx_row_id"].dropna()
+                    current_row_ids = [int(x) for x in pending.tolist()]
 
             current_iteration = self.state.get("_zx_iteration", 0)
 

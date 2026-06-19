@@ -18,6 +18,7 @@ dependencies = [
     "cryptography",
     "plotly",
     "pymoo>=0.6.1.6",
+    "pyinstaller",
 ]
 
 [project.scripts]

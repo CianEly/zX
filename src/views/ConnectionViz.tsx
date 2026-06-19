@@ -29,6 +29,14 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
       if (hosts.length > 0) setSelectedHost(hosts[0])
     })
 
+    // Fetch initial connection state (fixes race condition for local backend)
+    window.ipcRenderer.getConnectionState().then(initialState => {
+      setSteps(prev => ({
+        ...prev,
+        ...initialState
+      }))
+    })
+
     const cleanup = window.ipcRenderer.onConnectionProgress((data) => {
       setSteps(prev => ({
         ...prev,
@@ -51,6 +59,9 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
         const res = await window.ipcRenderer.spawnLocalBackend()
         if (!res.success) {
           console.error('Local backend failed:', res.error)
+        } else {
+          await window.ipcRenderer.initProject({ path: projectDir, env: 'local' })
+          window.dispatchEvent(new CustomEvent('fs-update'))
         }
       } else {
         const res = await window.ipcRenderer.connectSsh({
@@ -63,6 +74,7 @@ export function ConnectionViz({ projectPath, env: initialEnv }: ConnectionVizPro
         if (res.success) {
           // Scaffold remote project now that we have a connection
           await window.ipcRenderer.initProject({ path: projectDir, env: 'remote' })
+          window.dispatchEvent(new CustomEvent('fs-update'))
         }
       }
     } catch (e) {

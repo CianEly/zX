@@ -49,7 +49,11 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
       if (selectedFile && !files.includes(selectedFile)) {
         setSelectedFile(null)
       } else if (files.length > 0 && !selectedFile) {
-        setSelectedFile(files[0])
+        if (files.includes('zx_database.csv')) {
+          setSelectedFile('zx_database.csv')
+        } else {
+          setSelectedFile(files[0])
+        }
       }
     } catch (err) {
       console.error('Error listing data files:', err)
@@ -99,6 +103,7 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
       const res = await window.ipcRenderer.writeData({ projectPath, filename: selectedFile, content, env })
       if (res.success) {
         setIsDirty(false)
+        window.dispatchEvent(new CustomEvent('fs-update'))
       } else {
         alert('Failed to save data: ' + res.error)
       }
@@ -143,6 +148,7 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
       if (res.success && res.filename) {
         await refreshDataFiles()
         setSelectedFile(res.filename)
+        window.dispatchEvent(new CustomEvent('fs-update'))
       } else if (res.error !== 'Canceled') {
         alert('Import failed: ' + res.error)
       }
@@ -158,6 +164,7 @@ export function ParameterGrid({ projectPath, env, csvData, setCsvData, selectedF
       if (res.success) {
         await refreshDataFiles()
         setSelectedFile('zx_database.csv')
+        window.dispatchEvent(new CustomEvent('fs-update'))
       } else {
         alert('Failed to create database: ' + res.error)
       }

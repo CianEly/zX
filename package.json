@@ -8,9 +8,35 @@
     "dev": "vite",
     "dev:electron": "electron .",
     "dev:all": "concurrently \"vite\" \"electron .\"",
-    "build": "tsc -b && vite build && electron-builder",
+    "build": "vite build && electron-builder",
+    "build:all": "cd backend && ./build_binary.sh && cd .. && npm run build",
     "lint": "eslint .",
     "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.zx.app",
+    "productName": "zX",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "backend/dist/zx-backend",
+        "to": "zx-backend"
+      },
+      {
+        "from": "backend/dist/zx_backend-0.1.2-py3-none-any.whl",
+        "to": "zx_backend-0.1.2-py3-none-any.whl"
+      }
+    ],
+    "mac": {
+      "target": "dmg",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

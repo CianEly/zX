@@ -13,7 +13,9 @@ try {
     },
     invoke: (channel: string, ...args: any[]) => ipcRenderer.invoke(channel, ...args),
     getApiConfig: () => ipcRenderer.invoke('get-api-config'),
+    getAppLogs: () => ipcRenderer.invoke('get-app-logs'),
     getSshHosts: () => ipcRenderer.invoke('get-ssh-hosts'),
+    getConnectionState: () => ipcRenderer.invoke('get-connection-state'),
     selectDirectory: () => ipcRenderer.invoke('select-directory'),
     getRecentProjects: () => ipcRenderer.invoke('get-recent-projects'),
     addRecentProject: (params: { path: string; env: 'local' | 'remote' }) => ipcRenderer.invoke('add-recent-project', params),
@@ -34,6 +36,11 @@ try {
       const listener = (_event: any, data: any) => callback(data)
       ipcRenderer.on('connection-progress', listener)
       return () => ipcRenderer.off('connection-progress', listener)
+    },
+    onAppLog: (callback: (data: string) => void) => {
+      const listener = (_event: any, data: string) => callback(data)
+      ipcRenderer.on('app-log', listener)
+      return () => ipcRenderer.off('app-log', listener)
     },
     // ─── File Explorer IPC ──────────────────────────────────────────────────
     fsList: (params: { projectPath: string, env: 'local' | 'remote', targetPath?: string }) => ipcRenderer.invoke('fs-list', params),

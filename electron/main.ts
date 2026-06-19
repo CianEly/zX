@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import type { BrowserWindow as BrowserWindowType } from 'electron'
-import { join, dirname, resolve } from 'node:path'
+import { join, dirname, resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -15,15 +15,27 @@ import * as pty from 'node-pty'
 import type { IPty } from 'node-pty'
 
 let currentTunnelPort: number | null = null
+let connectionStateCache: Record<number, { status: string; sub?: string }> = {}
 
 const _dirname = dirname(fileURLToPath(import.meta.url))
 const username = userInfo().username
 
 function resolvePath(p: string) {
   if (p.startsWith('~/')) return join(homedir(), p.slice(2))
+  if (isAbsolute(p)) return p
+  // If launched via Finder, process.cwd() is often '/', meaning relative paths would go to root (failing with ENOENT).
+  if (process.cwd() === '/') return join(homedir(), p)
   return resolve(p)
 }
 
+// Helper for connection progress with caching and logging
+export function updateConnectionProgress(webContents: any, stepId: number, status: string, sub?: string) {
+  if (sub) broadcastLog(`[System]: Step ${stepId} - ${status} (${sub})`)
+  connectionStateCache[stepId] = { status, sub }
+  webContents.send('connection-progress', { id: stepId, status, sub })
+}
+
+ipcMain.handle('get-connection-state', () => connectionStateCache)
 ipcMain.handle('resolve-path', (event, p: string) => resolvePath(p))
 
 async function getSSHConfigForHost(hostAlias: string) {
@@ -50,6 +62,21 @@ let backendProcess: ChildProcess | null = null
 let sshClient: Client | null = null
 let tunnelServer: net.Server | null = null
 let sftpSession: any = null
+
+const appLogBuffer: string[] = []
+export function broadcastLog(msg: string) {
+  console.log(msg)
+  const line = msg + '\r\n'
+  appLogBuffer.push(line)
+  if (appLogBuffer.length > 2000) appLogBuffer.shift()
+  if (mainWindow) {
+    mainWindow.webContents.send('app-log', line)
+  }
+}
+
+ipcMain.handle('get-app-logs', () => {
+  return appLogBuffer
+})
 
 // SSH operation queue - prevents "Channel open failure" from concurrent SSH channel opens
 let sshQueue: Promise<any> = Promise.resolve()
@@ -193,20 +220,16 @@ ipcMain.handle('spawn-local-backend', async (event) => {
   try {
     currentTunnelPort = null // Reset tunnel port so frontend falls back to API_PORT
     
-    event.sender.send('connection-progress', {
-      step: 1,
-      status: 'active',
-      sub: 'starting local backend...'
-    })
+    updateConnectionProgress(event.sender, 1, 'running', 'Verifying local environment...')
 
     if (!backendProcess) {
       spawnBackend()
     }
     
-    // Wait for the backend to be healthy
+    // Wait for the backend to be healthy (PyInstaller extraction takes ~15s on first boot)
     let attempts = 0
     let success = false
-    while (attempts < 15) {
+    while (attempts < 60) {
       try {
         const res = await fetch(`http://127.0.0.1:${API_PORT}/health`, {
           headers: { Authorization: `Bearer ${API_TOKEN}` }
@@ -221,24 +244,12 @@ ipcMain.handle('spawn-local-backend', async (event) => {
     }
 
     if (!success) {
-      event.sender.send('connection-progress', {
-        step: 0,
-        status: 'error',
-        sub: 'Backend failed to start or health check timed out'
-      })
-      return { success: false, error: 'Backend failed to start or health check timed out' }
+      updateConnectionProgress(event.sender, 1, 'error', 'Local backend failed to become healthy within 30 seconds.')
+      return { success: false, error: 'Local backend health check timeout' }
     }
     
-    event.sender.send('connection-progress', {
-      step: 1,
-      status: 'done',
-      sub: 'local process running'
-    })
-    event.sender.send('connection-progress', {
-      step: 5,
-      status: 'done',
-      sub: 'token auth ok'
-    })
+    updateConnectionProgress(event.sender, 1, 'done')
+    updateConnectionProgress(event.sender, 5, 'done', 'Token authorized.')
 
     return { success: true }
   } catch (e) {
@@ -347,6 +358,7 @@ ipcMain.handle('init-project', async (event, { path: rawPath, env }: { path: str
       await mkdir(expandedPath, { recursive: true })
       await mkdir(join(expandedPath, 'hooks'), { recursive: true })
       await mkdir(join(expandedPath, 'data'), { recursive: true })
+      await mkdir(join(expandedPath, 'runs'), { recursive: true })
       
       for (const [filename, content] of Object.entries(hookTemplates)) {
         try { await access(join(expandedPath, 'hooks', filename), constants.R_OK) } 
@@ -355,27 +367,32 @@ ipcMain.handle('init-project', async (event, { path: rawPath, env }: { path: str
       return { success: true, path: expandedPath }
     } else {
       if (!sshClient) throw new Error('No active SSH connection')
-      await executeRemote(sshClient, `mkdir -p ${rawPath}/hooks ${rawPath}/data`)
+      await queueSSH(() => executeRemote(sshClient!, `mkdir -p ${rawPath}/hooks ${rawPath}/data ${rawPath}/runs`))
       const tempPath = join(app.getPath('userData'), 'temp_hooks')
       await mkdir(tempPath, { recursive: true })
       
       for (const [filename, content] of Object.entries(hookTemplates)) {
         const remoteFile = `${rawPath}/hooks/${filename}`
         // Check if file exists before overwriting
-        const exists = await new Promise<boolean>((resolve) => {
+        const exists = await queueSSH(() => new Promise<boolean>((resolve) => {
           sshClient!.exec(`[ -f ${remoteFile} ] && echo "exists"`, (err, stream) => {
             if (err) return resolve(false)
             let out = ''
             stream.on('data', (d) => out += d.toString())
             stream.on('close', () => resolve(out.includes('exists')))
           })
-        })
+        }))
 
         if (!exists) {
           console.log(`[init-project] Scaffolding missing hook: ${remoteFile}`)
           const localT = join(tempPath, filename)
           await writeFile(localT, content)
-          await uploadFile(sshClient, localT, remoteFile).catch(() => null)
+          
+          let sftpTarget = remoteFile
+          if (sftpTarget.startsWith('~/')) {
+            sftpTarget = sftpTarget.slice(2)
+          }
+          await queueSSH(() => uploadFile(sshClient!, localT, sftpTarget)).catch(() => null)
         }
       }
       return { success: true, path: rawPath }
@@ -393,7 +410,7 @@ ipcMain.handle('list-hooks', async (event, { projectPath, env }: { projectPath: 
       return files.filter(f => f.endsWith('.py'))
     } else {
       if (!sshClient) return []
-      return new Promise((resolve) => {
+      return queueSSH(() => new Promise((resolve) => {
         sshClient!.exec(`ls ${projectPath}/hooks/*.py`, (err, stream) => {
           if (err) return resolve([])
           let data = ''
@@ -403,7 +420,7 @@ ipcMain.handle('list-hooks', async (event, { projectPath, env }: { projectPath: 
             resolve(files)
           })
         })
-      })
+      }))
     }
   } catch { return [] }
 })
@@ -550,7 +567,7 @@ ipcMain.handle('import-data', async (event, { projectPath, env }: { projectPath:
       if (remoteTarget.startsWith('~/')) {
         remoteTarget = remoteTarget.slice(2)
       }
-      await uploadFile(sshClient, tempT, remoteTarget)
+      await queueSSH(() => uploadFile(sshClient!, tempT, remoteTarget))
     }
     
     console.log(`[import-data] Successfully imported: ${filename}`)
@@ -563,12 +580,25 @@ ipcMain.handle('import-data', async (event, { projectPath, env }: { projectPath:
 
 // Local Backend Spawning
 function spawnBackend() {
-  const backendDir = join(_dirname, '..', 'backend')
-  const uvPath = join(homedir(), '.local/bin/uv')
+  let backendExecutable: string;
+  let backendArgs: string[];
+  let cwd: string;
 
-  console.log('Spawning local backend...')
-  backendProcess = spawn(uvPath, ['run', 'zx-backend', '--port', API_PORT], {
-    cwd: backendDir,
+  if (app.isPackaged) {
+    console.log('Spawning bundled backend from resources...')
+    backendExecutable = join(process.resourcesPath, 'zx-backend')
+    backendArgs = []
+    cwd = process.resourcesPath // Or some other valid directory
+  } else {
+    console.log('Spawning local backend via uv...')
+    const backendDir = join(_dirname, '..', 'backend')
+    backendExecutable = join(homedir(), '.local/bin/uv')
+    backendArgs = ['run', 'zx-backend']
+    cwd = backendDir
+  }
+
+  backendProcess = spawn(backendExecutable, backendArgs, {
+    cwd: cwd,
     env: {
       ...process.env,
       ZX_API_TOKEN: API_TOKEN,
@@ -577,26 +607,18 @@ function spawnBackend() {
     }
   })
 
-  backendProcess.stdout?.on('data', (data) => console.log(`[Backend]: ${data}`))
+  backendProcess.stdout?.on('data', (data) => broadcastLog(`[Backend]: ${data.toString().trim()}`))
   backendProcess.stderr?.on('data', (data) => {
     const msg = data.toString()
-    console.error(`[Backend Error]: ${msg}`)
+    broadcastLog(`[Backend Error]: ${msg.trim()}`)
     if (msg.includes('address already in use')) {
-      mainWindow?.webContents.send('connection-progress', {
-        step: 1,
-        status: 'error',
-        sub: `Port ${API_PORT} in use. Kill existing process or use ZX_PORT.`
-      })
+      if (mainWindow) updateConnectionProgress(mainWindow.webContents, 1, 'error', `Port ${API_PORT} in use. Kill existing process or use ZX_PORT.`)
     }
   })
   backendProcess.on('close', (code) => {
     console.log(`Backend process exited with code ${code}`)
     if (code !== 0 && code !== null) {
-      mainWindow?.webContents.send('connection-progress', {
-        step: 0,
-        status: 'error',
-        sub: `Backend exited with code ${code}`
-      })
+      if (mainWindow) updateConnectionProgress(mainWindow.webContents, 0, 'error', `Backend exited with code ${code}`)
     }
   })
 }
@@ -627,11 +649,7 @@ ipcMain.handle('connect-ssh', async (event, { host: hostAlias, sshPort, tunnelPo
   }
 
   // ✅ STEP 1 → connecting
-  event.sender.send('connection-progress', {
-    step: 1,
-    status: 'active',
-    sub: 'connecting...'
-  })
+  updateConnectionProgress(event.sender, 1, 'active', 'connecting...')
 
 
   return new Promise((resolve, reject) => {
@@ -642,11 +660,7 @@ ipcMain.handle('connect-ssh', async (event, { host: hostAlias, sshPort, tunnelPo
         if (!err) sftpSession = sftp
       })
 
-      event.sender.send('connection-progress', {
-        step: 1,
-        status: 'done',
-        sub: 'connected'
-      })
+      updateConnectionProgress(event.sender, 1, 'done', 'Connected')
 
       setupRemoteEnvironment(sshClient!, tunnelPort, event.sender)
         .then(() => resolve({ success: true }))
@@ -674,7 +688,7 @@ ipcMain.handle('connect-ssh', async (event, { host: hostAlias, sshPort, tunnelPo
 
 async function setupRemoteEnvironment(conn: Client, localPort: number, webContents: Electron.WebContents) {
   const sendProgress = (step: number, status: string, sub?: string) => {
-    webContents.send('connection-progress', { step, status, sub })
+    updateConnectionProgress(webContents, step, status, sub)
   }
 
   try {
@@ -689,7 +703,10 @@ async function setupRemoteEnvironment(conn: Client, localPort: number, webConten
 
     // 3. SFTP the wheel
     sendProgress(3, 'active', 'deploying backend wheel...')
-    const localWheel = join(_dirname, '..', 'backend', 'dist', 'zx_backend-0.1.2-py3-none-any.whl')
+    const localWheel = app.isPackaged 
+      ? join(process.resourcesPath, 'zx_backend-0.1.2-py3-none-any.whl')
+      : join(_dirname, '..', 'backend', 'dist', 'zx_backend-0.1.2-py3-none-any.whl');
+      
     await uploadFile(conn, localWheel, '.zx/backend/zx_backend-0.1.2-py3-none-any.whl')
     sendProgress(3, 'done', 'backend deployed')
 
@@ -714,9 +731,9 @@ async function setupRemoteEnvironment(conn: Client, localPort: number, webConten
     ~/.zx/python/bin/python -m zx.main
     `
     conn.exec(remoteCmd, (err, stream) => {
-      if (err) console.error('Error starting remote backend:', err)
-      stream.on('data', (data: any) => console.log(`[Remote Backend]: ${data}`))
-      stream.stderr.on('data', (data: any) => console.error(`[Remote Backend Error]: ${data}`))
+      if (err) broadcastLog(`[Remote Error]: ${err.message}`)
+      stream.on('data', (data: any) => broadcastLog(`[Remote Backend]: ${data.toString().trim()}`))
+      stream.stderr.on('data', (data: any) => broadcastLog(`[Remote Backend Error]: ${data.toString().trim()}`))
     })
 
     // 6. Setup Tunnel
@@ -778,6 +795,7 @@ function uploadFile(conn: Client, localPath: string, remotePath: string): Promis
     conn.sftp((err, sftp) => {
       if (err) return reject(err)
       sftp.fastPut(localPath, remotePath, (err) => {
+        sftp.end()
         if (err) reject(err)
         else resolve()
       })
@@ -823,7 +841,9 @@ ipcMain.handle('fs-list', async (_event, { projectPath, env, targetPath }: { pro
   } else {
     return queueSSH(() => new Promise((resolve) => {
       if (!sshClient || !sftpSession) return resolve({ success: false, error: 'Not connected' })
-      sftpSession.readdir(dirPath, (err: any, list: any[]) => {
+      let sftpDirPath = dirPath
+      if (sftpDirPath.startsWith('~/')) sftpDirPath = sftpDirPath.slice(2)
+      sftpSession.readdir(sftpDirPath, (err: any, list: any[]) => {
         if (err) return resolve({ success: false, error: err.message })
         const result: FileNode[] = list.map(item => ({
           name: item.filename,
@@ -848,7 +868,9 @@ ipcMain.handle('fs-read', async (_event, { path, env }: { path: string, env: 'lo
   } else {
     return queueSSH(() => new Promise((resolve) => {
       if (!sshClient || !sftpSession) return resolve({ success: false, error: 'Not connected' })
-      sftpSession.readFile(path, 'utf-8', (err: any, content: Buffer) => {
+      let sftpPath = path
+      if (sftpPath.startsWith('~/')) sftpPath = sftpPath.slice(2)
+      sftpSession.readFile(sftpPath, 'utf-8', (err: any, content: Buffer) => {
         if (err) return resolve({ success: false, error: err.message })
         resolve({ success: true, content: content.toString('utf-8') })
       })
@@ -867,7 +889,8 @@ ipcMain.handle('fs-delete', async (_event, { path, env }: { path: string, env: '
   } else {
     return queueSSH(() => new Promise((resolve) => {
       if (!sshClient) return resolve({ success: false, error: 'Not connected' })
-      sshClient.exec(`rm -rf "${path.replace(/"/g, '\\"')}"`, (err, stream) => {
+      const safePath = path.replace(/^~\//, '$HOME/')
+      sshClient.exec(`rm -rf "${safePath.replace(/"/g, '\\"')}"`, (err, stream) => {
         if (err) return resolve({ success: false, error: err.message })
         stream.on('close', (code: number) => {
           if (code === 0) resolve({ success: true })
@@ -889,7 +912,11 @@ ipcMain.handle('fs-rename', async (_event, { oldPath, newPath, env }: { oldPath:
   } else {
     return queueSSH(() => new Promise((resolve) => {
       if (!sshClient || !sftpSession) return resolve({ success: false, error: 'Not connected' })
-      sftpSession.rename(oldPath, newPath, (err: any) => {
+      let sftpOldPath = oldPath
+      if (sftpOldPath.startsWith('~/')) sftpOldPath = sftpOldPath.slice(2)
+      let sftpNewPath = newPath
+      if (sftpNewPath.startsWith('~/')) sftpNewPath = sftpNewPath.slice(2)
+      sftpSession.rename(sftpOldPath, sftpNewPath, (err: any) => {
         if (err) return resolve({ success: false, error: err.message })
         resolve({ success: true })
       })

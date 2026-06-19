@@ -34,3 +34,9 @@ __pycache__/
 # zX Data
 run_*/
 zx_database.csv
+
+# Build output
+release/
+backend/build/
+apptest/
+backend/zx-backend.spec

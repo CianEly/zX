@@ -82,6 +82,14 @@ export function FileExplorer({ env, projectPath }: FileExplorerProps) {
     initTree()
   }, [initTree])
 
+  useEffect(() => {
+    const onFsUpdate = () => {
+      handleRefresh()
+    }
+    window.addEventListener('fs-update', onFsUpdate)
+    return () => window.removeEventListener('fs-update', onFsUpdate)
+  }, [handleRefresh])
+
   const toggleFolder = async (path: string, currentTree: TreeItem[]): Promise<TreeItem[]> => {
     const newTree = [...currentTree]
     for (let i = 0; i < newTree.length; i++) {

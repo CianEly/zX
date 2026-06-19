@@ -89,63 +89,76 @@ function TerminalInstance({ id, env, projectPath, isFocused, onFocus, onSplitH, 
     termRef.current = term
     fitRef.current = fit
 
-    // Create the backend terminal session
-    window.ipcRenderer.createTerminal({
-      terminalId: id,
-      env,
-      cols: term.cols,
-      rows: term.rows,
-      cwd: env === 'local' ? projectPath : undefined,
-    })
-
-    // Stream data from backend → xterm
-    const offData = window.ipcRenderer.onTerminalData(sessionId, (data) => {
-      term.write(data)
-    })
-
-    // Handle backend exit
-    const offExit = window.ipcRenderer.onTerminalExit(sessionId, () => {
-      setExited(true)
-      term.write('\r\n\x1b[1;31m[Process exited]\x1b[0m\r\n')
-    })
-
-    // Stream input: xterm → backend
-    const disposeInput = term.onData((data) => {
-      window.ipcRenderer.writeTerminal(sessionId, data)
-    })
+    let offData = () => {}
+    let offExit = () => {}
+    let disposeInput: any = null
+    let rafId: number = 0
 
     // ResizeObserver to auto-fit when container size changes
     const ro = new ResizeObserver(() => {
       try {
         fit.fit()
-        window.ipcRenderer.resizeTerminal(sessionId, term.cols, term.rows)
+        if (id !== 'app-console') {
+          window.ipcRenderer.resizeTerminal(sessionId, term.cols, term.rows)
+        }
       } catch {}
     })
     ro.observe(containerRef.current)
 
-    // Defer the PTY spawn until after the first layout paint so that
-    // fit.fit() produces valid cols/rows (avoids posix_spawnp on size 0)
-    let rafId: number
-    rafId = requestAnimationFrame(() => {
-      try { fit.fit() } catch {}
-      const cols = Math.max(term.cols || 80, 10)
-      const rows = Math.max(term.rows || 24, 5)
-      window.ipcRenderer.createTerminal({
-        terminalId: sessionId,
-        env,
-        cols,
-        rows,
-        cwd: env === 'local' ? projectPath : undefined,
+    if (id === 'app-console') {
+      term.options.disableStdin = true
+      term.writeln('\x1b[1;36m[System] App Console Initialized\x1b[0m')
+      
+      // Fetch historical logs
+      window.ipcRenderer.getAppLogs().then((logs) => {
+        logs.forEach(l => term.write(l))
       })
-    })
+
+      // Listen to new logs
+      offData = window.ipcRenderer.onAppLog((data) => {
+        term.write(data)
+      })
+    } else {
+      // Stream data from backend → xterm
+      offData = window.ipcRenderer.onTerminalData(sessionId, (data) => {
+        term.write(data)
+      })
+
+      // Handle backend exit
+      offExit = window.ipcRenderer.onTerminalExit(sessionId, () => {
+        setExited(true)
+        term.write('\r\n\x1b[1;31m[Process exited]\x1b[0m\r\n')
+      })
+
+      // Stream input: xterm → backend
+      disposeInput = term.onData((data) => {
+        window.ipcRenderer.writeTerminal(sessionId, data)
+      })
+
+      // Defer the PTY spawn until after the first layout paint
+      rafId = requestAnimationFrame(() => {
+        try { fit.fit() } catch {}
+        const cols = Math.max(term.cols || 80, 10)
+        const rows = Math.max(term.rows || 24, 5)
+        window.ipcRenderer.createTerminal({
+          terminalId: sessionId,
+          env,
+          cols,
+          rows,
+          cwd: env === 'local' ? projectPath : undefined,
+        })
+      })
+    }
 
     return () => {
       cancelAnimationFrame(rafId)
       offData()
       offExit()
-      disposeInput.dispose()
+      disposeInput?.dispose()
       ro.disconnect()
-      window.ipcRenderer.closeTerminal(sessionId)
+      if (id !== 'app-console') {
+        window.ipcRenderer.closeTerminal(sessionId)
+      }
       term.dispose()
     }
   }, [id, env, projectPath])
@@ -158,7 +171,7 @@ function TerminalInstance({ id, env, projectPath, isFocused, onFocus, onSplitH, 
       <div className="term-bar">
         <TerminalSquare size={12} className="term-bar-icon" />
         <span className="term-bar-label">
-          {env === 'remote' ? 'remote' : 'local'} — {id}
+          {id === 'app-console' ? 'App Console' : `${env === 'remote' ? 'remote' : 'local'} — ${id}`}
         </span>
         {exited && <span className="term-exited-badge">exited</span>}
         <div className="term-bar-actions">
@@ -168,9 +181,11 @@ function TerminalInstance({ id, env, projectPath, isFocused, onFocus, onSplitH, 
           <button className="term-bar-btn" title="Split vertically" onClick={(e) => { e.stopPropagation(); onSplitV() }}>
             <SplitSquareVertical size={12} />
           </button>
-          <button className="term-bar-btn danger" title="Close" onClick={(e) => { e.stopPropagation(); onClose() }}>
-            <X size={12} />
-          </button>
+          {id !== 'app-console' && (
+            <button className="term-bar-btn danger" title="Close" onClick={(e) => { e.stopPropagation(); onClose() }}>
+              <X size={12} />
+            </button>
+          )}
         </div>
       </div>
       <div ref={containerRef} className="term-viewport" />
@@ -221,12 +236,12 @@ function PaneTree({ node, env, projectPath, focusedId, onFocus, onSplit, onClose
 
 // ─── Tree manipulation helpers ────────────────────────────────────────────────
 
-function splitNode(root: PaneNode, targetId: string, dir: SplitDir): PaneNode {
+function splitNode(root: PaneNode, targetId: string, newId: string, dir: SplitDir): PaneNode {
   if (root.kind === 'leaf') {
     if (root.id !== targetId) return root
-    return { kind: 'split', dir, a: root, b: { kind: 'leaf', id: newPaneId() } }
+    return { kind: 'split', dir, a: root, b: { kind: 'leaf', id: newId } }
   }
-  return { ...root, a: splitNode(root.a, targetId, dir), b: splitNode(root.b, targetId, dir) }
+  return { ...root, a: splitNode(root.a, targetId, newId, dir), b: splitNode(root.b, targetId, newId, dir) }
 }
 
 function removeNode(root: PaneNode, targetId: string): PaneNode | null {
@@ -252,30 +267,25 @@ interface TerminalPanelProps {
 
 export function TerminalPanel({ env, projectPath }: TerminalPanelProps) {
   const initialId = useId().replace(/:/g, 't')
-  const [tree, setTree] = useState<PaneNode | null>(null)
-  const [focusedId, setFocusedId] = useState<string | null>(null)
+  const [tree, setTree] = useState<PaneNode | null>({ kind: 'leaf', id: 'app-console' })
+  const [focusedId, setFocusedId] = useState<string | null>('app-console')
 
   const handleAddTerminal = useCallback(() => {
-    const id = newPaneId()
-    setTree({ kind: 'leaf', id })
-    setFocusedId(id)
-  }, [])
+    const newId = newPaneId()
+    setTree(prev => {
+      if (!prev) return { kind: 'leaf', id: newId }
+      return splitNode(prev, focusedId || 'app-console', newId, 'v')
+    })
+    setFocusedId(newId)
+  }, [focusedId])
 
   const handleSplit = useCallback((targetId: string, dir: SplitDir) => {
+    const newId = newPaneId()
     setTree(prev => {
       if (!prev) return prev
-      const next = splitNode(prev, targetId, dir)
-      // Focus the newly created leaf (it will be sibling 'b' of the split)
-      const newId = newPaneId.toString() // just refocus; the split fn already used the counter
-      return next
+      return splitNode(prev, targetId, newId, dir)
     })
-    // find the new leaf and focus it by looking at the updated tree
-    setTimeout(() => {
-      setTree(prev => {
-        if (prev) setFocusedId(firstLeafId(prev))
-        return prev
-      })
-    }, 50)
+    setFocusedId(newId)
   }, [])
 
   const handleClose = useCallback((targetId: string) => {

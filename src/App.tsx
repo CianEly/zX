@@ -151,10 +151,18 @@ export default function App() {
            continue
         }
 
-        const idx = newRows.findIndex(r => parseInt(r._zx_row_id || '-1') === update.row_id);
+        let idx = newRows.findIndex(r => parseInt(r._zx_row_id || '-1') === update.row_id);
+        
+        // Fallback: If the user just imported a CSV, the UI might not have _zx_row_id yet. 
+        // Map it directly by array index!
+        if (idx === -1 && update.row_id >= 0 && update.row_id < newRows.length) {
+            idx = update.row_id;
+        }
+
         if (idx !== -1) {
           const merged = {
             ...newRows[idx],
+            _zx_row_id: update.row_id.toString(), // Ensure it gets populated
             _zx_status: update.status,
             _zx_hook_stage: update.stage,
             _zx_error: update.error,

@@ -20,9 +20,19 @@ export function HookEditor({ projectPath, env, connectionStatus }: HookEditorPro
   // Fetch hook list
   const refreshHookList = async () => {
     const list = await window.ipcRenderer.listHooks(projectPath, env)
+    const standardHooks = ['explore.py', 'launch.py', 'preprocess.py', 'initialize.py', 'finalize.py']
+    list.sort((a, b) => {
+       const aIdx = standardHooks.indexOf(a)
+       const bIdx = standardHooks.indexOf(b)
+       if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx
+       if (aIdx !== -1) return -1
+       if (bIdx !== -1) return 1
+       return a.localeCompare(b)
+    })
     setHooks(list)
     if (list.length > 0 && !selectedHook) {
-      setSelectedHook(list[0])
+      const defaultHook = list.find(h => standardHooks.includes(h)) || list[0]
+      setSelectedHook(defaultHook)
     }
     setIsDirty(false)
   }
@@ -50,6 +60,7 @@ export function HookEditor({ projectPath, env, connectionStatus }: HookEditorPro
     const res = await window.ipcRenderer.writeHook(projectPath, selectedHook, content, env)
     if (res.success) {
       setIsDirty(false)
+      window.dispatchEvent(new CustomEvent('fs-update'))
     } else {
       alert('Failed to save hook: ' + res.error)
     }
